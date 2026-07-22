@@ -1,0 +1,15 @@
+services:
+  portfolio-manager:
+    build:
+      context: .
+    ports:
+      - "127.0.0.1:8001:8001"
+    environment:
+      PORTFOLIO_DB_PATH: /data/portfolio.db
+      PORTFOLIO_QUOTE_TTL_SECONDS: "${PORTFOLIO_QUOTE_TTL_SECONDS:-300}"
+    volumes:
+      - portfolio-data:/data
+    restart: unless-stopped
+
+volumes:
+  portfolio-data:

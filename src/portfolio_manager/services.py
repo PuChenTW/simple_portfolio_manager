@@ -1,0 +1,554 @@
+import hashlib
+import json
+import unicodedata
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from uuid import uuid4
+
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from .errors import DomainError, not_found
+from .market import MarketDataError, MarketProvider, MarketSnapshot
+from .models import (
+    CashBalance,
+    CashTransaction,
+    Instrument,
+    Portfolio,
+    Position,
+    PositionTag,
+    QuoteCache,
+    Trade,
+)
+from .schemas import (
+    CashAction,
+    CashPositionRead,
+    CashTransactionCreate,
+    IndicatorsRead,
+    MarketInstrumentRead,
+    PortfolioCreate,
+    PortfolioRead,
+    PortfolioSummary,
+    PositionRead,
+    QuoteRead,
+    TradeCreate,
+    TradeSide,
+    utc_now,
+)
+
+ZERO = Decimal("0")
+HUNDRED = Decimal("100")
+
+
+def _aware(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _fingerprint(payload: dict[str, object]) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def _decimal_string(value: Decimal) -> str:
+    return format(value.normalize(), "f")
+
+
+def get_portfolio(session: Session, portfolio_id: str) -> Portfolio:
+    portfolio = session.get(Portfolio, portfolio_id)
+    if portfolio is None:
+        raise not_found("portfolio", portfolio_id)
+    return portfolio
+
+
+def create_portfolio(session: Session, data: PortfolioCreate) -> Portfolio:
+    now = utc_now()
+    portfolio = Portfolio(
+        id=str(uuid4()), name=data.name, base_currency=data.base_currency, created_at=now
+    )
+    session.add(portfolio)
+    try:
+        session.flush()
+        session.add(CashBalance(portfolio_id=portfolio.id, amount=ZERO, updated_at=now))
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise DomainError(
+            409,
+            "portfolio_name_exists",
+            "A portfolio with this name already exists",
+            {"name": data.name},
+        ) from exc
+    return portfolio
+
+
+@dataclass(frozen=True)
+class MarketState:
+    instrument: Instrument
+    quote: QuoteCache
+    stale: bool
+    warnings: list[str]
+
+
+class MarketService:
+    def __init__(self, session: Session, provider: MarketProvider, ttl_seconds: int) -> None:
+        self.session = session
+        self.provider = provider
+        self.ttl = timedelta(seconds=ttl_seconds)
+
+    def get(self, ticker: str) -> MarketState:
+        symbol = ticker.strip().upper()
+        instrument = self.session.get(Instrument, symbol)
+        cached = self.session.get(QuoteCache, symbol)
+        now = utc_now()
+        if (
+            instrument is not None
+            and cached is not None
+            and now - _aware(cached.fetched_at) <= self.ttl
+        ):
+            return MarketState(instrument, cached, False, [])
+
+        try:
+            snapshot = self.provider.fetch(symbol)
+        except MarketDataError as exc:
+            if instrument is not None and cached is not None:
+                return MarketState(
+                    instrument,
+                    cached,
+                    True,
+                    [f"Market refresh failed; cached quote returned: {exc}"],
+                )
+            raise DomainError(
+                503,
+                "market_data_unavailable",
+                "Market data is unavailable and no cached quote exists",
+                {"ticker": symbol},
+            ) from exc
+
+        instrument = self._save_instrument(snapshot, now)
+        self.session.flush()
+        cached = self._save_quote(snapshot, now)
+        self.session.flush()
+        return MarketState(instrument, cached, False, [])
+
+    def history(self, ticker: str, days: int):
+        try:
+            return self.provider.history(ticker.strip().upper(), days)
+        except MarketDataError as exc:
+            raise DomainError(
+                503,
+                "market_data_unavailable",
+                "Historical market data is unavailable",
+                {"ticker": ticker.strip().upper()},
+            ) from exc
+
+    def _save_instrument(self, snapshot: MarketSnapshot, now: datetime) -> Instrument:
+        data = snapshot.instrument
+        instrument = self.session.get(Instrument, data.ticker)
+        if instrument is None:
+            instrument = Instrument(
+                ticker=data.ticker,
+                name=data.name,
+                asset_type=data.asset_type,
+                market=data.market,
+                exchange=data.exchange,
+                currency=data.currency,
+                created_at=now,
+                updated_at=now,
+            )
+            self.session.add(instrument)
+        else:
+            instrument.name = data.name
+            instrument.asset_type = data.asset_type
+            instrument.market = data.market
+            instrument.exchange = data.exchange
+            instrument.currency = data.currency
+            instrument.updated_at = now
+        return instrument
+
+    def _save_quote(self, snapshot: MarketSnapshot, now: datetime) -> QuoteCache:
+        data = snapshot.quote
+        quote = self.session.get(QuoteCache, snapshot.instrument.ticker)
+        values = {
+            "price": data.price,
+            "open": data.open,
+            "high": data.high,
+            "low": data.low,
+            "previous_close": data.previous_close,
+            "volume": data.volume,
+            "change": data.change,
+            "change_percent": data.change_percent,
+            "market_cap": data.market_cap,
+            "year_high": data.year_high,
+            "year_low": data.year_low,
+            "sma20": data.sma20,
+            "sma50": data.sma50,
+            "rsi14": data.rsi14,
+            "macd": data.macd,
+            "macd_signal": data.macd_signal,
+            "macd_histogram": data.macd_histogram,
+            "provider_as_of": data.provider_as_of,
+            "indicators_as_of": data.indicators_as_of,
+            "fetched_at": now,
+        }
+        if quote is None:
+            quote = QuoteCache(ticker=snapshot.instrument.ticker, **values)
+            self.session.add(quote)
+        else:
+            for key, value in values.items():
+                setattr(quote, key, value)
+        return quote
+
+
+def market_response(state: MarketState) -> MarketInstrumentRead:
+    quote = state.quote
+    return MarketInstrumentRead(
+        ticker=state.instrument.ticker,
+        name=state.instrument.name,
+        asset_type=state.instrument.asset_type,
+        market=state.instrument.market,
+        exchange=state.instrument.exchange,
+        currency=state.instrument.currency,
+        quote=QuoteRead(
+            price=quote.price,
+            open=quote.open,
+            high=quote.high,
+            low=quote.low,
+            previous_close=quote.previous_close,
+            volume=quote.volume,
+            change=quote.change,
+            change_percent=quote.change_percent,
+            market_cap=quote.market_cap,
+            year_high=quote.year_high,
+            year_low=quote.year_low,
+            provider_as_of=_aware(quote.provider_as_of),
+            fetched_at=_aware(quote.fetched_at),
+            stale=state.stale,
+        ),
+        indicators=IndicatorsRead(
+            sma20=quote.sma20,
+            sma50=quote.sma50,
+            rsi14=quote.rsi14,
+            macd=quote.macd,
+            macd_signal=quote.macd_signal,
+            macd_histogram=quote.macd_histogram,
+            calculated_as_of=_aware(quote.indicators_as_of),
+        ),
+        warnings=state.warnings,
+    )
+
+
+def _trade_fingerprint(data: TradeCreate) -> str:
+    payload: dict[str, object] = {
+        "ticker": data.ticker,
+        "side": data.side.value,
+        "quantity": _decimal_string(data.quantity),
+        "unit_price": _decimal_string(data.unit_price),
+        "fee": _decimal_string(data.fee),
+    }
+    if "executed_at" in data.model_fields_set and data.executed_at is not None:
+        payload["executed_at"] = _aware(data.executed_at).isoformat()
+    return _fingerprint(payload)
+
+
+def create_trade(
+    session: Session,
+    market: MarketService,
+    portfolio_id: str,
+    data: TradeCreate,
+) -> Trade:
+    portfolio = get_portfolio(session, portfolio_id)
+    fingerprint = _trade_fingerprint(data)
+    existing = session.scalar(
+        select(Trade).where(
+            Trade.portfolio_id == portfolio_id, Trade.request_id == data.request_id
+        )
+    )
+    if existing is not None:
+        if existing.request_fingerprint == fingerprint:
+            return existing
+        raise DomainError(
+            409,
+            "idempotency_conflict",
+            "request_id was already used with different trade data",
+            {"request_id": data.request_id},
+        )
+
+    market_state = market.get(data.ticker)
+    instrument = market_state.instrument
+    if instrument.currency != portfolio.base_currency:
+        raise DomainError(
+            422,
+            "currency_mismatch",
+            "Instrument currency must match the portfolio base currency",
+            {
+                "ticker": instrument.ticker,
+                "instrument_currency": instrument.currency,
+                "portfolio_currency": portfolio.base_currency,
+            },
+        )
+
+    position = session.get(Position, (portfolio_id, instrument.ticker))
+    if position is None:
+        position = Position(
+            portfolio_id=portfolio_id,
+            ticker=instrument.ticker,
+            quantity=ZERO,
+            average_cost=ZERO,
+            realized_pnl=ZERO,
+            updated_at=utc_now(),
+        )
+        session.add(position)
+
+    if data.side == TradeSide.BUY:
+        new_quantity = position.quantity + data.quantity
+        total_cost = position.quantity * position.average_cost
+        total_cost += data.quantity * data.unit_price + data.fee
+        position.quantity = new_quantity
+        position.average_cost = total_cost / new_quantity
+    else:
+        if data.quantity > position.quantity:
+            raise DomainError(
+                422,
+                "insufficient_position",
+                "Sell quantity exceeds the current position",
+                {"available": str(position.quantity), "requested": str(data.quantity)},
+            )
+        position.realized_pnl += data.quantity * (data.unit_price - position.average_cost)
+        position.realized_pnl -= data.fee
+        position.quantity -= data.quantity
+        if position.quantity == ZERO:
+            position.average_cost = ZERO
+    position.updated_at = utc_now()
+
+    trade = Trade(
+        id=str(uuid4()),
+        portfolio_id=portfolio_id,
+        request_id=data.request_id,
+        request_fingerprint=fingerprint,
+        ticker=instrument.ticker,
+        side=data.side.value,
+        quantity=data.quantity,
+        unit_price=data.unit_price,
+        fee=data.fee,
+        executed_at=_aware(data.executed_at) if data.executed_at else utc_now(),
+        created_at=utc_now(),
+    )
+    session.add(trade)
+    session.commit()
+    return trade
+
+
+def _cash_fingerprint(data: CashTransactionCreate) -> str:
+    payload: dict[str, object] = {
+        "action": data.action.value,
+        "amount": _decimal_string(data.amount),
+    }
+    if "occurred_at" in data.model_fields_set and data.occurred_at is not None:
+        payload["occurred_at"] = _aware(data.occurred_at).isoformat()
+    return _fingerprint(payload)
+
+
+def create_cash_transaction(
+    session: Session, portfolio_id: str, data: CashTransactionCreate
+) -> CashTransaction:
+    get_portfolio(session, portfolio_id)
+    fingerprint = _cash_fingerprint(data)
+    existing = session.scalar(
+        select(CashTransaction).where(
+            CashTransaction.portfolio_id == portfolio_id,
+            CashTransaction.request_id == data.request_id,
+        )
+    )
+    if existing is not None:
+        if existing.request_fingerprint == fingerprint:
+            return existing
+        raise DomainError(
+            409,
+            "idempotency_conflict",
+            "request_id was already used with different cash transaction data",
+            {"request_id": data.request_id},
+        )
+
+    balance = session.get(CashBalance, portfolio_id)
+    if balance is None:
+        balance = CashBalance(portfolio_id=portfolio_id, amount=ZERO, updated_at=utc_now())
+        session.add(balance)
+    if data.action == CashAction.WITHDRAW and data.amount > balance.amount:
+        raise DomainError(
+            422,
+            "insufficient_cash",
+            "Withdrawal exceeds the available cash balance",
+            {"available": str(balance.amount), "requested": str(data.amount)},
+        )
+    balance.amount += data.amount if data.action == CashAction.DEPOSIT else -data.amount
+    balance.updated_at = utc_now()
+
+    transaction = CashTransaction(
+        id=str(uuid4()),
+        portfolio_id=portfolio_id,
+        request_id=data.request_id,
+        request_fingerprint=fingerprint,
+        action=data.action.value,
+        amount=data.amount,
+        occurred_at=_aware(data.occurred_at) if data.occurred_at else utc_now(),
+        created_at=utc_now(),
+    )
+    session.add(transaction)
+    session.commit()
+    return transaction
+
+
+def normalize_tag(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value).strip().casefold()
+    if not normalized or len(normalized) > 50:
+        raise DomainError(
+            422,
+            "invalid_tag",
+            "Tags must contain between 1 and 50 characters",
+            {"tag": value},
+        )
+    if any(unicodedata.category(character).startswith("C") for character in normalized):
+        raise DomainError(
+            422,
+            "invalid_tag",
+            "Tags cannot contain control characters",
+            {"tag": value},
+        )
+    return normalized
+
+
+def replace_tags(
+    session: Session, portfolio_id: str, ticker: str, raw_tags: list[str]
+) -> list[str]:
+    get_portfolio(session, portfolio_id)
+    symbol = ticker.strip().upper()
+    position = session.get(Position, (portfolio_id, symbol))
+    if position is None or position.quantity <= ZERO:
+        raise not_found("position", symbol)
+    tags = sorted({normalize_tag(tag) for tag in raw_tags})
+    current = session.scalars(
+        select(PositionTag).where(
+            PositionTag.portfolio_id == portfolio_id, PositionTag.ticker == symbol
+        )
+    ).all()
+    for tag in current:
+        session.delete(tag)
+    session.flush()
+    session.add_all(
+        [PositionTag(portfolio_id=portfolio_id, ticker=symbol, tag=tag) for tag in tags]
+    )
+    session.commit()
+    return tags
+
+
+def _tags_for(session: Session, portfolio_id: str) -> dict[str, list[str]]:
+    rows = session.execute(
+        select(PositionTag.ticker, PositionTag.tag)
+        .where(PositionTag.portfolio_id == portfolio_id)
+        .order_by(PositionTag.tag)
+    ).all()
+    result: dict[str, list[str]] = {}
+    for ticker, tag in rows:
+        result.setdefault(ticker, []).append(tag)
+    return result
+
+
+def build_summary(
+    session: Session, market: MarketService, portfolio_id: str
+) -> PortfolioSummary:
+    portfolio = get_portfolio(session, portfolio_id)
+    positions = session.scalars(
+        select(Position).where(Position.portfolio_id == portfolio_id).order_by(Position.ticker)
+    ).all()
+    tags_by_ticker = _tags_for(session, portfolio_id)
+    active: list[PositionRead] = []
+    warnings: list[str] = []
+    securities_value = ZERO
+    unrealized_total = ZERO
+
+    for position in positions:
+        if position.quantity <= ZERO:
+            continue
+        state = market.get(position.ticker)
+        quote = state.quote
+        value = position.quantity * quote.price
+        unrealized = position.quantity * (quote.price - position.average_cost)
+        percent = (
+            (quote.price - position.average_cost) / position.average_cost * HUNDRED
+            if position.average_cost != ZERO
+            else None
+        )
+        securities_value += value
+        unrealized_total += unrealized
+        warnings.extend(state.warnings)
+        active.append(
+            PositionRead(
+                ticker=position.ticker,
+                name=state.instrument.name,
+                asset_type=state.instrument.asset_type,
+                market=state.instrument.market,
+                currency=state.instrument.currency,
+                quantity=position.quantity,
+                average_cost=position.average_cost,
+                current_price=quote.price,
+                market_value=value,
+                realized_pnl=position.realized_pnl,
+                unrealized_pnl=unrealized,
+                total_pnl=position.realized_pnl + unrealized,
+                unrealized_pnl_percent=percent,
+                weight_percent=None,
+                tags=tags_by_ticker.get(position.ticker, []),
+                price_as_of=_aware(quote.provider_as_of),
+                price_fetched_at=_aware(quote.fetched_at),
+                price_stale=state.stale,
+            )
+        )
+
+    cash_balance = session.get(CashBalance, portfolio_id)
+    cash_value = cash_balance.amount if cash_balance else ZERO
+    total_value = securities_value + cash_value
+    if total_value != ZERO:
+        active = [
+            item.model_copy(
+                update={"weight_percent": item.market_value / total_value * HUNDRED}
+            )
+            for item in active
+        ]
+        cash_weight = cash_value / total_value * HUNDRED
+    else:
+        cash_weight = None
+
+    realized_total = sum((position.realized_pnl for position in positions), start=ZERO)
+    session.commit()
+    return PortfolioSummary(
+        portfolio=PortfolioRead.model_validate(portfolio),
+        positions=active,
+        cash=CashPositionRead(
+            currency=portfolio.base_currency,
+            amount=cash_value,
+            weight_percent=cash_weight,
+            updated_at=_aware(cash_balance.updated_at) if cash_balance else None,
+        ),
+        securities_value=securities_value,
+        cash_value=cash_value,
+        total_value=total_value,
+        realized_pnl=realized_total,
+        unrealized_pnl=unrealized_total,
+        total_pnl=realized_total + unrealized_total,
+        valuation_as_of=utc_now(),
+        warnings=list(dict.fromkeys(warnings)),
+    )
+
+
+def page_total(
+    session: Session,
+    model: type[Trade] | type[CashTransaction],
+    portfolio_id: str,
+) -> int:
+    return session.scalar(
+        select(func.count()).select_from(model).where(model.portfolio_id == portfolio_id)
+    ) or 0
