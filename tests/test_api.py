@@ -256,7 +256,7 @@ def test_openapi_is_self_describing_for_agents(harness) -> None:
     )
 
     assert "Recommended workflow" in schema["info"]["description"]
-    assert schema["servers"][0]["url"] == "http://127.0.0.1:8001"
+    assert schema["servers"][0]["url"] == "/"
     assert schema["x-agent-skill"]["workflow"]
     trade = schema["components"]["schemas"]["TradeCreate"]
     assert trade["examples"]

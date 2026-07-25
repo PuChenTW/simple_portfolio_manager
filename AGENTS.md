@@ -4,7 +4,9 @@
 
 Application code lives in `src/portfolio_manager/`. Keep HTTP routing and OpenAPI metadata in
 `api.py`, request/response contracts in `schemas.py`, database tables in `models.py`, portfolio
-rules in `services.py`, and Yahoo market-data logic in `market.py`. SQLite setup and runtime
+rules in `services.py`, and Yahoo market-data logic in `market.py`. The MCP server in
+`mcp_server.py` is a thin HTTP client that wraps each API endpoint as a tool; add a matching tool
+there whenever you add or change an endpoint. SQLite setup and runtime
 configuration belong in `db.py` and `config.py`. Database migrations live under
 `alembic/versions/`; add one whenever persisted models change. Tests live in `tests/`, with fakes
 in `tests/conftest.py`. Docker deployment files are
@@ -15,6 +17,8 @@ in `tests/conftest.py`. Docker deployment files are
 - `uv sync`: create the Python 3.13 environment from `uv.lock`.
 - `uv run alembic upgrade head`: initialize or migrate the SQLite database.
 - `uv run portfolio-manager`: run the API at `http://127.0.0.1:8001`.
+- `uv run portfolio-mcp`: run the MCP server (stdio; needs the API running). Set
+  `PORTFOLIO_MCP_TRANSPORT=streamable-http` for the HTTP transport.
 - `uv run pytest`: run deterministic tests; live Yahoo tests are skipped.
 - `uv run pytest -m external`: exercise `AAPL`, `2330.TW`, and `BTC-USD` online.
 - `uv run ruff check .`: enforce imports and Python style.

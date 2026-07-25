@@ -155,7 +155,7 @@ app = FastAPI(
     summary="Agent-friendly accounting for cash, stocks, and crypto portfolios",
     description=API_DESCRIPTION,
     openapi_tags=OPENAPI_TAGS,
-    servers=[{"url": "http://127.0.0.1:8001", "description": "Default local server"}],
+    servers=[{"url": "/", "description": "Default local server"}],
     responses=GLOBAL_RESPONSES,
 )
 
@@ -178,6 +178,7 @@ app.openapi = agent_friendly_openapi
 def dashboard() -> FileResponse:
     """Serve the local, read-only portfolio dashboard."""
     return FileResponse(STATIC_DIR / "index.html")
+
 
 _market_provider = YahooMarketProvider()
 
@@ -373,9 +374,7 @@ def add_trade(
 def list_trades(
     portfolio_id: PortfolioId,
     session: SessionDep,
-    offset: Annotated[
-        int, Query(ge=0, description="Zero-based number of entries to skip.")
-    ] = 0,
+    offset: Annotated[int, Query(ge=0, description="Zero-based number of entries to skip.")] = 0,
     limit: Annotated[
         int, Query(ge=1, le=200, description="Maximum entries to return, from 1 to 200.")
     ] = 50,
@@ -434,9 +433,7 @@ def add_cash_transaction(
 def list_cash_transactions(
     portfolio_id: PortfolioId,
     session: SessionDep,
-    offset: Annotated[
-        int, Query(ge=0, description="Zero-based number of entries to skip.")
-    ] = 0,
+    offset: Annotated[int, Query(ge=0, description="Zero-based number of entries to skip.")] = 0,
     limit: Annotated[
         int, Query(ge=1, le=200, description="Maximum entries to return, from 1 to 200.")
     ] = 50,

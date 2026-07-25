@@ -2,13 +2,57 @@ services:
   portfolio-manager:
     build:
       context: .
+    command:
+      - sh
+      - -c
+      - alembic upgrade head && uvicorn portfolio_manager.api:app --host 0.0.0.0 --port 8001
     ports:
-      - "127.0.0.1:8001:8001"
+      - "8001:8001"
     environment:
       PORTFOLIO_DB_PATH: /data/portfolio.db
       PORTFOLIO_QUOTE_TTL_SECONDS: "${PORTFOLIO_QUOTE_TTL_SECONDS:-300}"
     volumes:
       - portfolio-data:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=2)",
+        ]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+    restart: unless-stopped
+
+  portfolio-mcp:
+    build:
+      context: .
+    command: ["portfolio-mcp"]
+    ports:
+      - "8002:8002"
+    environment:
+      PORTFOLIO_MCP_TRANSPORT: streamable-http
+      PORTFOLIO_MCP_HOST: 0.0.0.0
+      PORTFOLIO_MCP_PORT: "8002"
+      PORTFOLIO_API_BASE_URL: http://portfolio-manager:8001
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import socket; socket.create_connection(('127.0.0.1', 8002), timeout=2).close()",
+        ]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+    depends_on:
+      portfolio-manager:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

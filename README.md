@@ -61,10 +61,12 @@ docker compose up --build -d
 docker compose ps
 ```
 
-The API remains local-only at `http://127.0.0.1:8001`. SQLite data is persisted in the
-`portfolio-data` named volume, so normal container rebuilds and restarts keep the portfolio.
-Stop the service with `docker compose down`; add `--volumes` only when you intentionally want
-to delete all portfolio data.
+This starts two services from the same image: the REST API at `http://127.0.0.1:8001` and the
+MCP server (Streamable HTTP) at `http://127.0.0.1:8002/mcp`. The MCP service calls the API over
+the Docker network and starts only after the API is healthy. Both ports are bound to loopback
+only. SQLite data is persisted in the `portfolio-data` named volume, so normal container rebuilds
+and restarts keep the portfolio. Stop the services with `docker compose down`; add `--volumes`
+only when you intentionally want to delete all portfolio data.
 
 ## Agent integration
 
@@ -79,6 +81,50 @@ When wrapping the API as a skill, preserve these core instructions from the Open
 - use a fresh `request_id` for each logical mutation and reuse it only for exact retries;
 - check `stale`, quote timestamps, and `warnings` before making a market-dependent decision;
 - send exact financial inputs as decimal strings and branch on machine-readable error `code`.
+
+## MCP server
+
+An MCP server exposes every API operation as a tool for MCP clients such as Hermes and Claude
+Desktop. It is a thin client over the HTTP API, so **the API must be running** (`uv run
+portfolio-manager`) before you start it. Each tool matches an API `operationId` one-to-one
+(`create_portfolio`, `record_trade`, `get_portfolio_summary`, …), and errors preserve the same
+`{code, message, details}` envelope.
+
+Run over stdio (the default, for local clients that launch a subprocess):
+
+```bash
+uv run portfolio-mcp
+```
+
+Run over Streamable HTTP (for networked clients), served at `/mcp`:
+
+```bash
+PORTFOLIO_MCP_TRANSPORT=streamable-http uv run portfolio-mcp
+```
+
+Environment variables:
+
+- `PORTFOLIO_API_BASE_URL` — API base URL (default `http://127.0.0.1:8001`).
+- `PORTFOLIO_MCP_TRANSPORT` — `stdio` (default) or `streamable-http`.
+- `PORTFOLIO_MCP_HOST` / `PORTFOLIO_MCP_PORT` — bind address for HTTP (default `127.0.0.1:8002`).
+
+Register it in an MCP client. For a stdio client, point it at the command:
+
+```json
+{
+  "mcpServers": {
+    "portfolio-manager": {
+      "command": "uv",
+      "args": ["run", "portfolio-mcp"],
+      "env": { "PORTFOLIO_API_BASE_URL": "http://127.0.0.1:8001" }
+    }
+  }
+}
+```
+
+For an HTTP client, start the server in `streamable-http` mode and connect to
+`http://127.0.0.1:8002/mcp`. The HTTP transport binds to loopback by default; exposing it beyond
+loopback needs explicit approval, matching the API's security posture.
 
 ## Quality checks
 
