@@ -15,6 +15,7 @@ from portfolio_manager.api import app
 from portfolio_manager.mcp_server import (
     ApiError,
     create_portfolio,
+    delete_portfolio,
     get_portfolio,
     list_portfolios,
     record_cash_transaction,
@@ -75,6 +76,18 @@ async def test_domain_error_preserves_envelope(mcp_client) -> None:
     assert error.status_code == 404
     assert error.code == "portfolio_not_found"
     assert error.details["id"] == "does-not-exist"
+
+
+async def test_delete_portfolio_removes_it(mcp_client) -> None:
+    portfolio = await create_portfolio(name="US", base_currency="USD")
+    portfolio_id = portfolio["id"]
+
+    result = await delete_portfolio(portfolio_id)
+    assert result is None
+
+    with pytest.raises(ApiError) as excinfo:
+        await get_portfolio(portfolio_id)
+    assert excinfo.value.code == "portfolio_not_found"
 
 
 async def test_insufficient_position_error(mcp_client) -> None:

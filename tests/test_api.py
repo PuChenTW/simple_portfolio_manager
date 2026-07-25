@@ -20,6 +20,36 @@ def test_health_and_portfolios_are_isolated(harness) -> None:
     assert duplicate.json()["code"] == "portfolio_name_exists"
 
 
+def test_delete_portfolio_cascades_and_is_idempotent_on_missing_id(harness) -> None:
+    portfolio_id = harness.portfolio()
+    harness.client.post(
+        f"/api/v1/portfolios/{portfolio_id}/cash-transactions",
+        json={"request_id": "cash-1", "action": "deposit", "amount": "10000"},
+    )
+    harness.client.post(
+        f"/api/v1/portfolios/{portfolio_id}/trades",
+        json={
+            "request_id": "trade-1",
+            "ticker": "AAPL",
+            "side": "buy",
+            "quantity": "10",
+            "unit_price": "140",
+        },
+    )
+
+    delete = harness.client.delete(f"/api/v1/portfolios/{portfolio_id}")
+    assert delete.status_code == 204
+    assert delete.text == ""
+
+    missing = harness.client.get(f"/api/v1/portfolios/{portfolio_id}")
+    assert missing.status_code == 404
+    assert missing.json()["code"] == "portfolio_not_found"
+
+    again = harness.client.delete(f"/api/v1/portfolios/{portfolio_id}")
+    assert again.status_code == 404
+    assert again.json()["code"] == "portfolio_not_found"
+
+
 def test_dashboard_and_static_assets_are_available_without_changing_openapi(harness) -> None:
     dashboard = harness.client.get("/")
     assert dashboard.status_code == 200

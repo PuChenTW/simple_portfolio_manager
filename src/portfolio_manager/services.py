@@ -85,6 +85,12 @@ def create_portfolio(session: Session, data: PortfolioCreate) -> Portfolio:
     return portfolio
 
 
+def delete_portfolio(session: Session, portfolio_id: str) -> None:
+    portfolio = get_portfolio(session, portfolio_id)
+    session.delete(portfolio)
+    session.commit()
+
+
 @dataclass(frozen=True)
 class MarketState:
     instrument: Instrument

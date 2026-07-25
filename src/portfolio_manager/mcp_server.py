@@ -70,6 +70,8 @@ async def _request(method: str, path: str, **kwargs: Any) -> Any:
             {"error": str(exc)},
         ) from exc
     if response.is_success:
+        if response.status_code == 204:
+            return None
         return response.json()
     try:
         body = response.json()
@@ -117,6 +119,15 @@ async def list_portfolios() -> list[dict[str, Any]]:
 async def get_portfolio(portfolio_id: str) -> dict[str, Any]:
     """Get portfolio metadata; read the currency invariant before choosing a ticker to trade."""
     return await _request("GET", f"/api/v1/portfolios/{portfolio_id}")
+
+
+@mcp.tool()
+async def delete_portfolio(portfolio_id: str) -> None:
+    """Permanently delete a portfolio and all its positions, trades, and cash history.
+
+    This cannot be undone. Confirm the portfolio_id via list_portfolios first if unsure.
+    """
+    await _request("DELETE", f"/api/v1/portfolios/{portfolio_id}")
 
 
 @mcp.tool()

@@ -40,6 +40,7 @@ from .services import (
     create_cash_transaction,
     create_portfolio,
     create_trade,
+    delete_portfolio,
     get_portfolio,
     market_response,
     normalize_tag,
@@ -305,6 +306,22 @@ def list_portfolios(session: SessionDep) -> list[Portfolio]:
 def read_portfolio(portfolio_id: PortfolioId, session: SessionDep) -> Portfolio:
     """Read the currency invariant before selecting a ticker for a trade."""
     return get_portfolio(session, portfolio_id)
+
+
+@app.delete(
+    "/api/v1/portfolios/{portfolio_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    operation_id="delete_portfolio",
+    summary="Delete a portfolio and all its data",
+    responses={404: {"model": ErrorResponse, "description": "`portfolio_not_found`."}},
+    tags=["portfolios"],
+)
+def remove_portfolio(portfolio_id: PortfolioId, session: SessionDep) -> None:
+    """
+    Permanently delete the portfolio and cascade-delete its positions, trades, cash
+    transactions, and cash balance. This cannot be undone.
+    """
+    delete_portfolio(session, portfolio_id)
 
 
 @app.get(
