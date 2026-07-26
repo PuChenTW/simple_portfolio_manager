@@ -273,13 +273,55 @@ async def get_market_instrument(ticker: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def get_market_history(ticker: str, days: int = 365) -> dict[str, Any]:
-    """Get split/dividend-adjusted daily OHLCV history (30-730 days) for agent-side research.
+async def get_market_history(
+    ticker: str,
+    days: int | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    interval: str = "1d",
+    adjustment: str = "yfinance_auto_adjust",
+) -> dict[str, Any]:
+    """Get reproducible Yahoo OHLCV history plus provider and period provenance.
 
+    Use legacy `days` (30-730) or an inclusive ISO `start_date`/`end_date` range, not both.
+    `interval` is 1d, 1wk, or 1mo. `adjustment` is yfinance_auto_adjust or unadjusted.
+    Check provider, actual observation dates, adjustment, and warnings before using the data.
     Fetched on demand; not a trade execution price source.
     """
+    params: dict[str, Any] = {"interval": interval, "adjustment": adjustment}
+    if days is not None:
+        params["days"] = days
+    if start_date is not None:
+        params["start_date"] = start_date
+    if end_date is not None:
+        params["end_date"] = end_date
+    return await _request("GET", f"/api/v1/market/instruments/{ticker}/history", params=params)
+
+
+@mcp.tool()
+async def get_technical_snapshot(
+    ticker: str,
+    as_of: str | None = None,
+    benchmark: str | None = None,
+    event_date: str | None = None,
+    lookback_years: int = 5,
+) -> dict[str, Any]:
+    """Research technical market state and price risk at a reproducible cutoff.
+
+    Company research should pass its report data cutoff as ISO `as_of`. Check provider, actual
+    as-of, adjustment, and warnings before use. Interpret trend, momentum, volatility, volume,
+    benchmark, and event evidence together with fundamentals, valuation, and other market evidence.
+    Anchored VWAP is an approximation derived from daily OHLCV typical prices.
+    """
+    params: dict[str, Any] = {"lookback_years": lookback_years}
+    if as_of is not None:
+        params["as_of"] = as_of
+    if benchmark is not None:
+        params["benchmark"] = benchmark
+    if event_date is not None:
+        params["event_date"] = event_date
     return await _request(
-        "GET", f"/api/v1/market/instruments/{ticker}/history", params={"days": days}
+        "GET", f"/api/v1/market/instruments/{ticker}/technical-snapshot", params=params
     )
 
 

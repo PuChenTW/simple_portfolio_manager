@@ -2,7 +2,7 @@ import hashlib
 import json
 import unicodedata
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
@@ -11,7 +11,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .errors import DomainError, not_found
-from .market import MarketDataError, MarketProvider, MarketSnapshot
+from .market import (
+    HistoryAdjustment,
+    HistoryInterval,
+    HistoryResult,
+    MarketDataError,
+    MarketProvider,
+    MarketSnapshot,
+)
 from .models import (
     CashBalance,
     CashTransaction,
@@ -33,10 +40,12 @@ from .schemas import (
     PortfolioSummary,
     PositionRead,
     QuoteRead,
+    TechnicalSnapshotRead,
     TradeCreate,
     TradeSide,
     utc_now,
 )
+from .technical import bars_frame, calculate_technical, event_metrics, relative_returns
 
 ZERO = Decimal("0")
 HUNDRED = Decimal("100")
@@ -140,16 +149,146 @@ class MarketService:
         self.session.flush()
         return MarketState(instrument, cached, False, [])
 
-    def history(self, ticker: str, days: int):
+    def history(
+        self,
+        ticker: str,
+        days: int | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        interval: HistoryInterval = HistoryInterval.DAILY,
+        adjustment: HistoryAdjustment = HistoryAdjustment.AUTO,
+    ) -> HistoryResult:
+        symbol = ticker.strip().upper()
         try:
-            return self.provider.history(ticker.strip().upper(), days)
+            return self.provider.history(
+                symbol,
+                days=days,
+                start_date=start_date,
+                end_date=end_date,
+                interval=interval,
+                adjustment=adjustment,
+            )
         except MarketDataError as exc:
             raise DomainError(
                 503,
                 "market_data_unavailable",
                 "Historical market data is unavailable",
-                {"ticker": ticker.strip().upper()},
+                {
+                    "ticker": symbol,
+                    "requested_period": {
+                        "days": days,
+                        "start_date": start_date.isoformat() if start_date else None,
+                        "end_date": end_date.isoformat() if end_date else None,
+                    },
+                    "available_observations": 0,
+                },
             ) from exc
+
+    def technical_snapshot(
+        self,
+        ticker: str,
+        as_of: date | None,
+        benchmark: str | None,
+        event_date: date | None,
+        lookback_years: int,
+    ) -> TechnicalSnapshotRead:
+        symbol = ticker.strip().upper()
+        requested_end = as_of
+        reference = as_of or datetime.now(UTC).date()
+        start_date = reference - timedelta(days=lookback_years * 366)
+        try:
+            history = self.history(
+                symbol,
+                start_date=start_date,
+                end_date=requested_end,
+                interval=HistoryInterval.DAILY,
+                adjustment=HistoryAdjustment.AUTO,
+            )
+        except DomainError as exc:
+            details = {
+                **exc.details,
+                "as_of": as_of.isoformat() if as_of else None,
+                "benchmark": benchmark.strip().upper() if benchmark else None,
+                "event_date": event_date.isoformat() if event_date else None,
+            }
+            raise DomainError(exc.status_code, exc.code, exc.message, details) from exc
+        frame = bars_frame(history.bars, as_of)
+        if frame.empty:
+            raise DomainError(
+                503,
+                "market_data_unavailable",
+                "Historical market data is unavailable",
+                {
+                    "ticker": symbol,
+                    "as_of": as_of.isoformat() if as_of else None,
+                    "requested_period": {
+                        "start_date": start_date.isoformat(),
+                        "end_date": as_of.isoformat() if as_of else None,
+                    },
+                    "available_observations": 0,
+                },
+            )
+
+        analysis = calculate_technical(frame)
+        warnings = list(history.warnings) + analysis.warnings
+        relative = None
+        if benchmark:
+            benchmark_symbol = benchmark.strip().upper()
+            try:
+                benchmark_history = self.history(
+                    benchmark_symbol,
+                    start_date=start_date,
+                    end_date=requested_end,
+                    interval=HistoryInterval.DAILY,
+                    adjustment=HistoryAdjustment.AUTO,
+                )
+                benchmark_frame = bars_frame(benchmark_history.bars, as_of)
+                relative_values, relative_warnings = relative_returns(frame, benchmark_frame)
+                common_count = len(frame.index.intersection(benchmark_frame.index))
+                relative = {
+                    "benchmark": benchmark_symbol,
+                    "common_observation_count": common_count,
+                    **relative_values,
+                }
+                warnings.extend(
+                    f"Benchmark {benchmark_symbol}: {warning}" for warning in relative_warnings
+                )
+            except DomainError:
+                relative = {
+                    "benchmark": benchmark_symbol,
+                    "common_observation_count": 0,
+                    **{f"return_{period}d_percent": None for period in (20, 60, 120, 252)},
+                }
+                warnings.append(
+                    f"Benchmark {benchmark_symbol} data is unavailable; relative returns are null"
+                )
+
+        event = None
+        if event_date:
+            event, event_warnings = event_metrics(frame, event_date)
+            warnings.extend(
+                f"Event {event_date.isoformat()}: {warning}" for warning in event_warnings
+            )
+
+        actual_start = frame.index[0].date()
+        actual_end = frame.index[-1].date()
+        return TechnicalSnapshotRead(
+            ticker=symbol,
+            provider=history.provider,
+            as_of=actual_end,
+            interval=history.interval,
+            adjustment=history.adjustment,
+            actual_start_date=actual_start,
+            actual_end_date=actual_end,
+            bar_count=len(frame),
+            trend=analysis.trend,
+            momentum=analysis.momentum,
+            volatility=analysis.volatility,
+            volume=analysis.volume,
+            relative_strength=relative,
+            event_analysis=event,
+            warnings=warnings,
+        )
 
     def _save_instrument(self, snapshot: MarketSnapshot, now: datetime) -> Instrument:
         data = snapshot.instrument

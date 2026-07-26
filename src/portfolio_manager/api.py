@@ -1,3 +1,4 @@
+from datetime import date
 from pathlib import Path as FilePath
 from typing import Annotated
 
@@ -11,7 +12,7 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .db import get_session
 from .errors import DomainError
-from .market import MarketProvider, YahooMarketProvider
+from .market import HistoryAdjustment, HistoryInterval, MarketProvider, YahooMarketProvider
 from .models import CashTransaction, Portfolio, Trade
 from .schemas import (
     CashTransactionCreate,
@@ -29,6 +30,7 @@ from .schemas import (
     TagMode,
     TagsRead,
     TagsUpdate,
+    TechnicalSnapshotRead,
     TradeCreate,
     TradePage,
     TradeRead,
@@ -79,6 +81,8 @@ Local, single-user portfolio accounting API designed for autonomous agents and g
 Quotes are cached for five minutes by default. If Yahoo refresh fails and an older quote exists,
 the API returns it with `stale=true` and a warning. A `503 market_data_unavailable` means no usable
 cached data exists. Do not treat this API as an execution venue or real-time market-data feed.
+Research history and technical snapshots are fetched on demand. Pass the report cutoff as `as_of`;
+then inspect the returned actual date, adjustment, provider, and warnings before using results.
 
 ## Error handling
 
@@ -116,8 +120,8 @@ OPENAPI_TAGS = [
     {
         "name": "market",
         "description": (
-            "Resolve Yahoo-compatible tickers and read timestamped quotes, indicators, and daily "
-            "history."
+            "Resolve Yahoo-compatible tickers and read timestamped quotes, reproducible history, "
+            "and technical research snapshots. Indicators may be null when history is insufficient."
         ),
     },
 ]
@@ -131,7 +135,9 @@ GLOBAL_RESPONSES = {
 
 AGENT_SKILL_METADATA = {
     "name": "local-portfolio-manager",
-    "purpose": "Track completed trades, cash, allocation, and P&L in local portfolios.",
+    "purpose": (
+        "Track completed trades, cash, allocation, and P&L, and research historical market state."
+    ),
     "instructions": [
         "Never describe record_trade as placing or executing an order.",
         "Keep every portfolio single-currency and verify ticker currency before a trade.",
@@ -140,10 +146,13 @@ AGENT_SKILL_METADATA = {
         "Check stale, provider_as_of, fetched_at, and warnings before using a market price.",
         "Send exact quantities and monetary values as decimal strings.",
         "Branch on the error code and retry only transient market_data_unavailable failures.",
+        "For company research, pass the report cutoff as technical-snapshot as_of.",
+        "Inspect provider, actual as-of, adjustment, and warnings before interpreting indicators.",
     ],
     "workflow": [
         "list_portfolios or create_portfolio",
         "get_market_instrument",
+        "get_market_history or get_technical_snapshot for market research",
         "record_trade and optionally record_cash_transaction",
         "replace_position_tags",
         "get_portfolio_summary or list_positions",
@@ -583,8 +592,8 @@ def read_market_instrument(ticker: TickerPath, session: SessionDep, market: Mark
     "/api/v1/market/instruments/{ticker}/history",
     response_model=HistoryRead,
     operation_id="get_market_history",
-    summary="Get adjusted daily OHLCV history",
-    response_description="Up to the requested number of adjusted daily bars",
+    summary="Get reproducible OHLCV history through an inclusive end date",
+    response_description="Chronological bars plus request and provider provenance",
     responses={
         503: {
             "model": ErrorResponse,
@@ -597,21 +606,143 @@ def read_market_history(
     ticker: TickerPath,
     market: MarketDep,
     days: Annotated[
-        int,
+        int | None,
         Query(
             ge=30,
             le=730,
-            description="Requested daily lookback, from 30 through 730 calendar days.",
+            description=(
+                "Legacy bar lookback. Mutually exclusive with start_date/end_date; defaults to "
+                "365 only when no period parameter is supplied."
+            ),
         ),
-    ] = 365,
+    ] = None,
+    start_date: Annotated[
+        date | None,
+        Query(description="Inclusive requested start date; mutually exclusive with days."),
+    ] = None,
+    end_date: Annotated[
+        date | None,
+        Query(
+            description=(
+                "Inclusive research cutoff. The Yahoo adapter adds one day for yfinance's "
+                "exclusive end parameter and removes observations after this date."
+            )
+        ),
+    ] = None,
+    interval: Annotated[
+        HistoryInterval,
+        Query(description="Yahoo history interval: daily, weekly, or monthly."),
+    ] = HistoryInterval.DAILY,
+    adjustment: Annotated[
+        HistoryAdjustment,
+        Query(
+            description=(
+                "yfinance_auto_adjust adjusts OHLC for splits/dividends; unadjusted returns "
+                "reported OHLC without automatic adjustment."
+            )
+        ),
+    ] = HistoryAdjustment.AUTO,
 ) -> HistoryRead:
     """
-    Return split/dividend-adjusted daily bars for agent-side research.
+    Return chronological OHLCV bars for agent-side research.
 
-    This endpoint fetches history on demand and is not a trade execution price source.
+    `end_date` is inclusive at this API boundary. Bars reflect actual provider observations, not
+    calendar-day placeholders. This endpoint fetches on demand and is not an execution-price source.
     """
-    bars = market.history(ticker, days)
-    return HistoryRead(
-        ticker=ticker.strip().upper(),
-        bars=[HistoryBarRead.model_validate(bar) for bar in bars],
+    if days is not None and (start_date is not None or end_date is not None):
+        raise DomainError(
+            422,
+            "validation_error",
+            "days is mutually exclusive with start_date and end_date",
+            {
+                "days": days,
+                "start_date": start_date.isoformat() if start_date else None,
+                "end_date": end_date.isoformat() if end_date else None,
+            },
+        )
+    if start_date is not None and end_date is not None and start_date > end_date:
+        raise DomainError(
+            422,
+            "validation_error",
+            "start_date must be on or before end_date",
+            {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
+        )
+    default_days = 365 if start_date is None and end_date is None else None
+    result = market.history(
+        ticker,
+        days=days if days is not None else default_days,
+        start_date=start_date,
+        end_date=end_date,
+        interval=interval,
+        adjustment=adjustment,
     )
+    return HistoryRead(
+        ticker=result.ticker,
+        provider=result.provider,
+        interval=result.interval,
+        adjustment=result.adjustment,
+        adjusted=result.adjustment == HistoryAdjustment.AUTO,
+        requested_start_date=result.requested_start_date,
+        requested_end_date=result.requested_end_date,
+        actual_first_observation=result.bars[0].timestamp.date() if result.bars else None,
+        actual_last_observation=result.bars[-1].timestamp.date() if result.bars else None,
+        fetched_at=result.fetched_at,
+        warnings=result.warnings,
+        bars=[HistoryBarRead.model_validate(bar) for bar in result.bars],
+    )
+
+
+@app.get(
+    "/api/v1/market/instruments/{ticker}/technical-snapshot",
+    response_model=TechnicalSnapshotRead,
+    operation_id="get_technical_snapshot",
+    summary="Calculate a reproducible technical market snapshot",
+    response_description="Technical state, provenance, optional benchmark and event analysis",
+    responses={
+        503: {
+            "model": ErrorResponse,
+            "description": (
+                "`market_data_unavailable`: primary ticker history could not be fetched."
+            ),
+        }
+    },
+    tags=["market"],
+)
+def read_technical_snapshot(
+    ticker: TickerPath,
+    market: MarketDep,
+    as_of: Annotated[
+        date | None,
+        Query(
+            description=(
+                "Inclusive research cutoff. All bars and calculations end on or before this date. "
+                "Omit to use and return the provider's last valid observation."
+            )
+        ),
+    ] = None,
+    benchmark: Annotated[
+        str | None,
+        Query(description="Optional Yahoo ticker for common-date relative returns."),
+    ] = None,
+    event_date: Annotated[
+        date | None,
+        Query(
+            description=(
+                "Optional event date. The first observation on or after it becomes the anchor. "
+                "Anchored VWAP is a daily OHLCV approximation using typical price."
+            )
+        ),
+    ] = None,
+    lookback_years: Annotated[
+        int,
+        Query(ge=1, le=10, description="Calendar-year history window used for calculations."),
+    ] = 5,
+) -> TechnicalSnapshotRead:
+    """
+    Research trend, momentum, volatility, volume, relative strength, and event price behavior.
+
+    Pass a company-research report cutoff as `as_of`. Results use auto-adjusted Yahoo daily bars.
+    Insufficient inputs leave individual metrics null and add warnings; interpret technical
+    evidence together with fundamentals, valuation, and other market evidence.
+    """
+    return market.technical_snapshot(ticker, as_of, benchmark, event_date, lookback_years)

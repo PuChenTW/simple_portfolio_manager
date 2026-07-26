@@ -1,6 +1,7 @@
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from enum import StrEnum
 from typing import Protocol
 
 import pandas as pd
@@ -60,10 +61,42 @@ class HistoryBar:
     volume: Decimal
 
 
+class HistoryInterval(StrEnum):
+    DAILY = "1d"
+    WEEKLY = "1wk"
+    MONTHLY = "1mo"
+
+
+class HistoryAdjustment(StrEnum):
+    AUTO = "yfinance_auto_adjust"
+    UNADJUSTED = "unadjusted"
+
+
+@dataclass(frozen=True)
+class HistoryResult:
+    ticker: str
+    provider: str
+    interval: HistoryInterval
+    adjustment: HistoryAdjustment
+    requested_start_date: date | None
+    requested_end_date: date | None
+    fetched_at: datetime
+    warnings: list[str]
+    bars: list[HistoryBar]
+
+
 class MarketProvider(Protocol):
     def fetch(self, ticker: str) -> MarketSnapshot: ...
 
-    def history(self, ticker: str, days: int) -> list[HistoryBar]: ...
+    def history(
+        self,
+        ticker: str,
+        days: int | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        interval: HistoryInterval = HistoryInterval.DAILY,
+        adjustment: HistoryAdjustment = HistoryAdjustment.AUTO,
+    ) -> HistoryResult: ...
 
 
 def _decimal(value: object) -> Decimal | None:
@@ -77,6 +110,11 @@ def _utc_timestamp(value: object) -> datetime:
     if timestamp.tzinfo is None:
         timestamp = timestamp.tz_localize("UTC")
     return timestamp.tz_convert("UTC").to_pydatetime()
+
+
+def _observation_timestamp(value: object) -> datetime:
+    """Preserve Yahoo's exchange-local bar date while normalizing its time representation."""
+    return datetime.combine(pd.Timestamp(value).date(), datetime.min.time(), UTC)
 
 
 def _provider_timestamp(value: object, fallback: object) -> datetime:
@@ -204,12 +242,30 @@ class YahooMarketProvider:
         )
         return MarketSnapshot(instrument=_metadata(symbol, info), quote=quote)
 
-    def history(self, ticker: str, days: int) -> list[HistoryBar]:
+    def history(
+        self,
+        ticker: str,
+        days: int | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        interval: HistoryInterval = HistoryInterval.DAILY,
+        adjustment: HistoryAdjustment = HistoryAdjustment.AUTO,
+    ) -> HistoryResult:
         symbol = ticker.strip().upper()
-        start = datetime.now(UTC) - timedelta(days=days + 10)
+        requested_days = days if days is not None else 365
+        requested_start = start_date
+        requested_end = end_date
+        if start_date is None:
+            reference = end_date or datetime.now(UTC).date()
+            start_date = reference - timedelta(days=requested_days + 10)
+        yahoo_end = end_date + timedelta(days=1) if end_date is not None else None
         try:
             frame = yf.Ticker(symbol).history(
-                start=start.date(), interval="1d", auto_adjust=True, actions=False
+                start=start_date,
+                end=yahoo_end,
+                interval=interval.value,
+                auto_adjust=adjustment == HistoryAdjustment.AUTO,
+                actions=False,
             )
         except Exception as exc:
             raise MarketDataError(f"Yahoo request failed for {symbol}") from exc
@@ -217,18 +273,47 @@ class YahooMarketProvider:
             raise MarketDataError(f"No market data found for {symbol}")
 
         bars: list[HistoryBar] = []
-        for index, row in frame.tail(days).iterrows():
+        if end_date is not None:
+            frame = frame[pd.Index(frame.index).date <= end_date]
+        if requested_start is None and requested_end is None:
+            frame = frame.tail(requested_days)
+        warnings: list[str] = []
+        skipped_ohlc = 0
+        missing_volume = 0
+        for index, row in frame.sort_index().iterrows():
             values = [_decimal(row.get(column)) for column in ("Open", "High", "Low", "Close")]
             if any(value is None for value in values):
+                skipped_ohlc += 1
                 continue
+            volume = _decimal(row.get("Volume"))
+            if volume is None:
+                missing_volume += 1
             bars.append(
                 HistoryBar(
-                    timestamp=_utc_timestamp(index),
+                    timestamp=_observation_timestamp(index),
                     open=values[0],  # type: ignore[arg-type]
                     high=values[1],  # type: ignore[arg-type]
                     low=values[2],  # type: ignore[arg-type]
                     close=values[3],  # type: ignore[arg-type]
-                    volume=_decimal(row.get("Volume")) or Decimal("0"),
+                    volume=volume or Decimal("0"),
                 )
             )
-        return bars
+        if not bars:
+            raise MarketDataError(f"No usable market data found for {symbol}")
+        if skipped_ohlc:
+            warnings.append(f"Skipped {skipped_ohlc} observations with missing OHLC values")
+        if missing_volume:
+            warnings.append(
+                f"Volume was unavailable for {missing_volume} observations and represented as zero"
+            )
+        return HistoryResult(
+            ticker=symbol,
+            provider="Yahoo Finance via yfinance",
+            interval=interval,
+            adjustment=adjustment,
+            requested_start_date=requested_start,
+            requested_end_date=requested_end,
+            fetched_at=datetime.now(UTC),
+            warnings=warnings,
+            bars=bars,
+        )

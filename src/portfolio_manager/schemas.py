@@ -1,9 +1,11 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+
+from .market import HistoryAdjustment, HistoryInterval
 
 PositiveDecimal = Annotated[
     Decimal,
@@ -314,11 +316,102 @@ class HistoryBarRead(ApiModel):
 
 
 class HistoryRead(ApiModel):
-    """Adjusted daily price history for one canonical ticker."""
+    """OHLCV history with explicit request, observation, and adjustment provenance."""
 
     ticker: str
-    adjusted: bool = True
+    provider: str
+    interval: HistoryInterval
+    adjustment: HistoryAdjustment
+    adjusted: bool = Field(description="Compatibility flag; prefer the precise adjustment field.")
+    requested_start_date: date | None
+    requested_end_date: date | None
+    actual_first_observation: date | None
+    actual_last_observation: date | None
+    fetched_at: datetime
+    warnings: list[str] = Field(default_factory=list)
     bars: list[HistoryBarRead]
+
+
+class TrendRead(ApiModel):
+    sma20: Decimal | None
+    sma50: Decimal | None
+    sma200: Decimal | None
+    sma50_change_20d_percent: Decimal | None
+    sma200_change_20d_percent: Decimal | None
+    price_vs_sma20_percent: Decimal | None
+    price_vs_sma50_percent: Decimal | None
+    price_vs_sma200_percent: Decimal | None
+
+
+class MomentumRead(ApiModel):
+    return_20d_percent: Decimal | None
+    return_60d_percent: Decimal | None
+    return_120d_percent: Decimal | None
+    return_252d_percent: Decimal | None
+    rsi14: Decimal | None
+    macd: Decimal | None
+    macd_signal: Decimal | None
+    macd_histogram: Decimal | None
+
+
+class VolatilityRead(ApiModel):
+    atr14: Decimal | None
+    atr14_percent: Decimal | None
+    realized_volatility_20d_percent: Decimal | None
+    realized_volatility_60d_percent: Decimal | None
+    drawdown_from_252d_high_percent: Decimal | None
+
+
+class VolumeAnalysisRead(ApiModel):
+    latest_vs_20d_average: Decimal | None
+    latest_252d_percentile: Decimal | None
+
+
+class RelativeStrengthRead(ApiModel):
+    benchmark: str
+    common_observation_count: int
+    return_20d_percent: Decimal | None
+    return_60d_percent: Decimal | None
+    return_120d_percent: Decimal | None
+    return_252d_percent: Decimal | None
+
+
+class EventAnalysisRead(ApiModel):
+    """Event bar and daily-OHLCV-derived anchored VWAP approximation."""
+
+    requested_event_date: date
+    effective_anchor_date: date | None
+    gap_percent: Decimal | None
+    high: Decimal | None
+    low: Decimal | None
+    close: Decimal | None
+    volume_percentile: Decimal | None
+    anchored_vwap: Decimal | None = Field(
+        description=(
+            "Approximation from daily typical price (high + low + close) / 3, weighted by "
+            "daily volume from the effective anchor through as_of."
+        )
+    )
+
+
+class TechnicalSnapshotRead(ApiModel):
+    """Reproducible technical market snapshot capped at the actual as-of observation."""
+
+    ticker: str
+    provider: str
+    as_of: date
+    interval: HistoryInterval
+    adjustment: HistoryAdjustment
+    actual_start_date: date
+    actual_end_date: date
+    bar_count: int
+    trend: TrendRead
+    momentum: MomentumRead
+    volatility: VolatilityRead
+    volume: VolumeAnalysisRead
+    relative_strength: RelativeStrengthRead | None
+    event_analysis: EventAnalysisRead | None
+    warnings: list[str] = Field(default_factory=list)
 
 
 class PositionRead(ApiModel):

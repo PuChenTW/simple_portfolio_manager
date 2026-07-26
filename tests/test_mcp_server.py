@@ -16,7 +16,9 @@ from portfolio_manager.mcp_server import (
     ApiError,
     create_portfolio,
     delete_portfolio,
+    get_market_history,
     get_portfolio,
+    get_technical_snapshot,
     list_portfolios,
     record_cash_transaction,
     record_trade,
@@ -114,3 +116,36 @@ async def test_write_is_idempotent(mcp_client) -> None:
         portfolio_id=portfolio_id, request_id="cash-9", action="deposit", amount="500"
     )
     assert first["id"] == second["id"]
+
+
+async def test_market_research_tools_forward_query_parameters(mcp_client) -> None:
+    history = await get_market_history(
+        "AAPL",
+        start_date="2026-07-20",
+        end_date="2026-07-24",
+        interval="1wk",
+        adjustment="unadjusted",
+    )
+    assert history["requested_start_date"] == "2026-07-20"
+    assert history["requested_end_date"] == "2026-07-24"
+    assert history["interval"] == "1wk"
+    assert history["adjustment"] == "unadjusted"
+
+    snapshot = await get_technical_snapshot(
+        "AAPL",
+        as_of="2026-07-24",
+        benchmark="MSFT",
+        event_date="2026-07-20",
+        lookback_years=3,
+    )
+    assert snapshot["as_of"] == "2026-07-24"
+    assert snapshot["relative_strength"]["benchmark"] == "MSFT"
+    assert snapshot["event_analysis"]["requested_event_date"] == "2026-07-20"
+
+
+async def test_market_research_error_preserves_api_envelope(mcp_client) -> None:
+    with pytest.raises(ApiError) as excinfo:
+        await get_technical_snapshot("UNKNOWN", as_of="2026-07-24")
+    assert excinfo.value.code == "market_data_unavailable"
+    assert excinfo.value.details["ticker"] == "UNKNOWN"
+    assert excinfo.value.details["as_of"] == "2026-07-24"

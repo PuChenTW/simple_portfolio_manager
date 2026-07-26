@@ -250,6 +250,81 @@ def test_market_cache_stale_fallback_and_history(harness) -> None:
     history = harness.client.get("/api/v1/market/instruments/AAPL/history?days=30")
     assert history.status_code == 200
     assert len(history.json()["bars"]) == 30
+    assert history.json()["adjustment"] == "yfinance_auto_adjust"
+    assert history.json()["adjusted"] is True
+
+
+def test_history_range_parameters_and_inclusive_end(harness) -> None:
+    response = harness.client.get(
+        "/api/v1/market/instruments/AAPL/history",
+        params={
+            "start_date": "2026-07-20",
+            "end_date": "2026-07-24",
+            "interval": "1wk",
+            "adjustment": "unadjusted",
+        },
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["provider"] == "Fake Market"
+    assert data["interval"] == "1wk"
+    assert data["adjustment"] == "unadjusted"
+    assert data["adjusted"] is False
+    assert data["requested_start_date"] == "2026-07-20"
+    assert data["requested_end_date"] == "2026-07-24"
+    assert data["actual_last_observation"] == "2026-07-24"
+    assert [bar["timestamp"] for bar in data["bars"]] == sorted(
+        bar["timestamp"] for bar in data["bars"]
+    )
+
+
+def test_history_period_parameters_are_mutually_exclusive(harness) -> None:
+    response = harness.client.get(
+        "/api/v1/market/instruments/AAPL/history",
+        params={"days": 30, "start_date": "2026-01-01"},
+    )
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
+
+
+def test_technical_snapshot_benchmark_event_and_as_of(harness) -> None:
+    response = harness.client.get(
+        "/api/v1/market/instruments/AAPL/technical-snapshot",
+        params={
+            "as_of": "2026-07-24",
+            "benchmark": "MSFT",
+            "event_date": "2026-07-20",
+            "lookback_years": 5,
+        },
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["ticker"] == "AAPL"
+    assert data["provider"] == "Fake Market"
+    assert data["as_of"] == "2026-07-24"
+    assert data["actual_end_date"] == "2026-07-24"
+    assert data["bar_count"] == 320
+    assert data["trend"]["sma200"] is not None
+    assert data["momentum"]["return_252d_percent"] is not None
+    assert data["relative_strength"]["benchmark"] == "MSFT"
+    assert data["relative_strength"]["common_observation_count"] == 320
+    assert data["event_analysis"]["requested_event_date"] == "2026-07-20"
+    assert data["event_analysis"]["effective_anchor_date"] == "2026-07-20"
+    assert data["event_analysis"]["anchored_vwap"] is not None
+
+
+def test_technical_snapshot_keeps_partial_results_with_warnings(harness) -> None:
+    harness.provider.history_limit = 10
+    response = harness.client.get(
+        "/api/v1/market/instruments/AAPL/technical-snapshot",
+        params={"as_of": "2026-07-24", "benchmark": "MSFT"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["trend"]["sma20"] is None
+    assert data["momentum"]["return_20d_percent"] is None
+    assert data["relative_strength"]["return_20d_percent"] is None
+    assert data["warnings"]
 
 
 def test_validation_error_shape(harness) -> None:
@@ -276,6 +351,8 @@ def test_openapi_is_self_describing_for_agents(harness) -> None:
     assert {
         "create_portfolio",
         "get_market_instrument",
+        "get_market_history",
+        "get_technical_snapshot",
         "record_trade",
         "record_cash_transaction",
         "replace_position_tags",
@@ -288,6 +365,12 @@ def test_openapi_is_self_describing_for_agents(harness) -> None:
     assert "Recommended workflow" in schema["info"]["description"]
     assert schema["servers"][0]["url"] == "/"
     assert schema["x-agent-skill"]["workflow"]
+    technical = schema["paths"][
+        "/api/v1/market/instruments/{ticker}/technical-snapshot"
+    ]["get"]
+    assert "as_of" in technical["description"]
+    event_schema = schema["components"]["schemas"]["EventAnalysisRead"]
+    assert "typical price" in event_schema["properties"]["anchored_vwap"]["description"]
     trade = schema["components"]["schemas"]["TradeCreate"]
     assert trade["examples"]
     assert "idempotency" in trade["properties"]["request_id"]["description"]

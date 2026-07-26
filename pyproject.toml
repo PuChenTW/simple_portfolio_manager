@@ -9,6 +9,7 @@ dependencies = [
     "fastapi>=0.116.1",
     "httpx>=0.28.1",
     "mcp>=1.12",
+    "pandas>=2.3.1",
     "sqlalchemy>=2.0.43",
     "uvicorn>=0.35.0",
     "yfinance>=0.2.65",

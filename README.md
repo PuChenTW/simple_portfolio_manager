@@ -52,6 +52,33 @@ Ticker conventions are `AAPL` for US stocks, `2330.TW` for TWSE, `8069.TWO` for 
 currency; use separate portfolios for TWD and USD holdings. Trades and cash are deliberately
 managed separately and trades never alter cash automatically.
 
+## Market research
+
+History supports the original `?days=365` request and reproducible date ranges:
+
+```bash
+curl 'http://127.0.0.1:8001/api/v1/market/instruments/AAPL/history?start_date=2021-01-01&end_date=2026-07-24&interval=1d&adjustment=yfinance_auto_adjust'
+```
+
+`end_date` is inclusive even though yfinance's native `end` argument is exclusive. `days` cannot
+be combined with `start_date` or `end_date`. Intervals are `1d`, `1wk`, and `1mo`; adjustment is
+`yfinance_auto_adjust` or `unadjusted`. The response reports the requested range, actual first and
+last observations, provider, fetch time, adjustment, and warnings.
+
+For a fixed technical snapshot, pass the research report's data cutoff:
+
+```bash
+curl 'http://127.0.0.1:8001/api/v1/market/instruments/AAPL/technical-snapshot?as_of=2026-07-24&benchmark=%5EGSPC&event_date=2026-04-30&lookback_years=5'
+```
+
+The snapshot calculates SMA trend and slopes, period returns, RSI14, MACD, ATR14, realized
+volatility, 252-bar drawdown, and volume statistics. An optional benchmark is aligned on common
+observation dates. An optional event uses the first observation on or after `event_date`; its
+anchored VWAP is an approximation based on daily typical price `(high + low + close) / 3`, weighted
+by daily volume. Insufficient history produces `null` metrics and warnings rather than invented
+values. Always inspect provider, actual as-of date, adjustment, and warnings, and combine technical
+signals with fundamentals, valuation, and other evidence.
+
 ## Docker Compose
 
 Build and start the service with its migrations applied automatically:
@@ -126,6 +153,19 @@ For an HTTP client, start the server in `streamable-http` mode and connect to
 `http://127.0.0.1:8002/mcp`. The HTTP transport binds to loopback by default; exposing it beyond
 loopback needs explicit approval, matching the API's security posture.
 
+Market-research MCP clients can call:
+
+```text
+get_market_history(
+  ticker="AAPL", start_date="2021-01-01", end_date="2026-07-24",
+  interval="1d", adjustment="yfinance_auto_adjust"
+)
+get_technical_snapshot(
+  ticker="AAPL", as_of="2026-07-24", benchmark="^GSPC",
+  event_date="2026-04-30", lookback_years=5
+)
+```
+
 ## Quality checks
 
 ```bash
@@ -140,5 +180,10 @@ available:
 uv run pytest -m external
 ```
 
-Yahoo Finance data can be delayed and has no production SLA. Every response identifies the
-provider timestamp, local fetch timestamp, and whether a cached value is stale.
+Yahoo Finance data can be delayed, corrected after publication, vary by exchange, and has no
+production SLA. yfinance is an unofficial adapter, and long-range intraday data is not offered by
+these research endpoints. Auto-adjusted history rewrites OHLC for corporate actions; unadjusted
+history can contain split/dividend discontinuities. Daily OHLCV cannot reproduce intraday paths,
+so event anchored VWAP is explicitly an approximation. Quote responses identify provider and
+local fetch timestamps and whether cached data is stale; research responses identify actual
+observation dates, adjustment, fetch time, and data-quality warnings.

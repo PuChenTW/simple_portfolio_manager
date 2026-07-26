@@ -1,6 +1,6 @@
 from collections.abc import Generator
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -10,7 +10,10 @@ from sqlalchemy.orm import Session, sessionmaker
 from portfolio_manager.api import app, get_market_provider
 from portfolio_manager.db import Base, create_sqlite_engine, get_session
 from portfolio_manager.market import (
+    HistoryAdjustment,
     HistoryBar,
+    HistoryInterval,
+    HistoryResult,
     InstrumentSnapshot,
     MarketDataError,
     MarketSnapshot,
@@ -30,6 +33,7 @@ def pytest_collection_modifyitems(config, items) -> None:
 class FakeMarketProvider:
     def __init__(self) -> None:
         self.fail = False
+        self.history_limit: int | None = None
         self.calls: list[str] = []
         self.prices = {
             "AAPL": Decimal("140"),
@@ -87,22 +91,46 @@ class FakeMarketProvider:
             ),
         )
 
-    def history(self, ticker: str, days: int) -> list[HistoryBar]:
+    def history(
+        self,
+        ticker: str,
+        days: int | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        interval: HistoryInterval = HistoryInterval.DAILY,
+        adjustment: HistoryAdjustment = HistoryAdjustment.AUTO,
+    ) -> HistoryResult:
         if self.fail or ticker not in self.prices:
             raise MarketDataError(f"No fixture for {ticker}")
         price = self.prices[ticker]
-        now = datetime.now(UTC)
-        return [
+        last_date = end_date or date(2026, 7, 24)
+        count = min(days or 320, self.history_limit or 320)
+        bars = [
             HistoryBar(
-                timestamp=now - timedelta(days=index),
+                timestamp=datetime.combine(
+                    last_date - timedelta(days=index), datetime.min.time(), UTC
+                ),
                 open=price - 1,
                 high=price + 1,
                 low=price - 2,
-                close=price,
-                volume=Decimal("100"),
+                close=price - Decimal(index) / Decimal("10"),
+                volume=Decimal("100") + index,
             )
-            for index in range(min(days, 40))
+            for index in reversed(range(count))
         ]
+        if start_date is not None:
+            bars = [bar for bar in bars if bar.timestamp.date() >= start_date]
+        return HistoryResult(
+            ticker=ticker,
+            provider="Fake Market",
+            interval=interval,
+            adjustment=adjustment,
+            requested_start_date=start_date,
+            requested_end_date=end_date,
+            fetched_at=datetime.now(UTC),
+            warnings=[],
+            bars=bars,
+        )
 
 
 @dataclass
