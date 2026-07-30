@@ -27,6 +27,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .flows import resolve_flows
 from .journal import EventType, FlowClassification, LegType, classify_flow
 from .models import Instrument, JournalEvent, JournalLeg
 from .services import ZERO, _aware
@@ -78,6 +79,8 @@ class ReplayCoverage:
 
     events_applied: int = 0
     unlinked_legacy_events: int = 0
+    # Migrated events a person has since ruled on; no longer a gap, but still worth reporting.
+    reclassified_legacy_events: int = 0
     unknown_flow_events: int = 0
     warnings: list[str] = field(default_factory=list)
 
@@ -112,6 +115,8 @@ def replay_state(
     events = _events_through(session, portfolio_id, cutoff)
     tickers = _ticker_index(session)
     reversed_types = {event.id: event.event_type for event, _ in events}
+    # A human ruling on what a migrated cash movement meant outranks the type-derived guess.
+    overrides = resolve_flows(session, [event.id for event, _ in events])
 
     cash = ZERO
     positions: dict[str, ReplayedPosition] = {}
@@ -120,13 +125,23 @@ def replay_state(
 
     for event, legs in events:
         coverage.events_applied += 1
-        if event.is_unlinked_legacy:
+        if event.is_unlinked_legacy and event.id not in overrides:
             coverage.unlinked_legacy_events += 1
+        elif event.is_unlinked_legacy:
+            coverage.reclassified_legacy_events += 1
 
         # SQLite hands back naive datetimes even for timezone-aware columns.
         in_window = since is None or _aware(event.occurred_at) >= _aware(since)
         cash += _fold_event(
-            event, legs, positions, tickers, flows, coverage, in_window, reversed_types
+            event,
+            legs,
+            positions,
+            tickers,
+            flows,
+            coverage,
+            in_window,
+            reversed_types,
+            overrides,
         )
 
     _describe_gaps(coverage)
@@ -149,6 +164,7 @@ def _fold_event(
     coverage: ReplayCoverage,
     in_window: bool,
     reversed_types: dict[str, str],
+    overrides: dict[str, FlowClassification],
 ) -> Decimal:
     """Apply one event's legs; returns its net cash delta."""
     cash_delta = ZERO
@@ -159,7 +175,7 @@ def _fold_event(
             cash_delta += leg.amount_delta or ZERO
 
     if in_window:
-        _accumulate_flows(event, legs, cash_delta, flows, coverage, reversed_types)
+        _accumulate_flows(event, legs, cash_delta, flows, coverage, reversed_types, overrides)
     return cash_delta
 
 
@@ -203,15 +219,32 @@ def _accumulate_flows(
     flows: FlowTotals,
     coverage: ReplayCoverage,
     reversed_types: dict[str, str],
+    overrides: dict[str, FlowClassification],
 ) -> None:
     """Attribute an event's cash movement to the category that performance measurement needs."""
+    override = overrides.get(event.id)
+    if override is not None:
+        # A ruling settles the question; the event type is what was unreliable in the first place.
+        _apply_classification(override, event, legs, cash_delta, flows, coverage)
+        return
+
     event_type = _effective_type(event, reversed_types)
     if event_type is None:
         coverage.unknown_flow_events += 1
         flows.unknown += cash_delta
         return
 
-    classification = classify_flow(event_type)
+    _apply_classification(classify_flow(event_type), event, legs, cash_delta, flows, coverage)
+
+
+def _apply_classification(
+    classification: FlowClassification,
+    event: JournalEvent,
+    legs: list[JournalLeg],
+    cash_delta: Decimal,
+    flows: FlowTotals,
+    coverage: ReplayCoverage,
+) -> None:
     if classification is FlowClassification.EXTERNAL:
         if cash_delta >= ZERO:
             flows.external_in += cash_delta
@@ -255,6 +288,12 @@ def _leg_magnitude(leg: JournalLeg) -> Decimal:
 
 
 def _describe_gaps(coverage: ReplayCoverage) -> None:
+    if coverage.reclassified_legacy_events:
+        coverage.warnings.append(
+            f"{coverage.reclassified_legacy_events} migrated events were reclassified by hand "
+            "rather than derived from their event type; see the flow-classification overrides "
+            "for the reason recorded against each"
+        )
     if coverage.unlinked_legacy_events:
         coverage.warnings.append(
             f"{coverage.unlinked_legacy_events} migrated legacy events carry no settlement "

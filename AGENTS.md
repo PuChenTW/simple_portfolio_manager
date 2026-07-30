@@ -23,7 +23,10 @@ Historical valuation builds on the journal. `replay.py` rebuilds positions, cash
 totals at any cutoff by folding journal legs, and is the only correct source of past state --
 `positions` and `cash_balances` describe the present. `valuation.py` prices a replayed state
 with history bounded by the valuation date and stores it as a snapshot, plus the re-runnable
-range rebuild behind `portfolio-admin rebuild-snapshots`.
+range rebuild behind `portfolio-admin rebuild-snapshots`. `flows.py` holds manual rulings on
+whether a migrated cash movement was investor capital or portfolio activity; the pre-journal
+model could not distinguish them, and replay reads an active ruling in place of the value
+derived from the event type.
 
 ## Build, Test, and Development Commands
 
@@ -36,6 +39,10 @@ range rebuild behind `portfolio-admin rebuild-snapshots`.
 - `uv run portfolio-admin verify-journal <portfolio_id>`: compare stored cash against the journal.
 - `uv run portfolio-admin rebuild-snapshots <portfolio_id> <start> <end>`: build daily valuation
   snapshots over a date range. Safe to re-run; existing dates are skipped.
+- `uv run portfolio-admin review-flows <portfolio_id>`: list migrated cash events awaiting a
+  ruling on whether they crossed the portfolio boundary, with the evidence for each suggestion.
+- `uv run portfolio-admin set-flow <event_id> <external|internal> --reason "..."`: record that
+  ruling. `--retract` withdraws it and restores the derived value.
 - `uv run pytest`: run deterministic tests; live Yahoo tests are skipped.
 - `uv run pytest -m external`: exercise `AAPL`, `2330.TW`, and `BTC-USD` online.
 - `uv run ruff check .`: enforce imports and Python style.

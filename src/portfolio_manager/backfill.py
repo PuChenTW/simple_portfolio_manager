@@ -82,6 +82,7 @@ def _write_event(
     occurred_at,
     legs: list[Leg],
     memo: str,
+    source_reference: str | None = None,
 ) -> JournalEvent:
     now = utc_now()
     event = JournalEvent(
@@ -94,6 +95,9 @@ def _write_event(
         functional_currency=portfolio.base_currency,
         occurred_at=_aware(occurred_at),
         source=LEGACY_SOURCE,
+        # The operator's own request_id often describes what the row was for; it is the best
+        # evidence available when someone later rules on whether cash crossed the boundary.
+        source_reference=source_reference,
         memo=memo,
         is_unlinked_legacy=True,
         created_at=now,
@@ -171,6 +175,7 @@ def backfill_portfolio(session: Session, portfolio: Portfolio) -> BackfillReport
                 f"Migrated legacy trade {trade.id}. Settlement cash was recorded separately, if "
                 "at all; the counterpart is unknown."
             ),
+            source_reference=trade.request_id,
         )
         report.trades_migrated += 1
         report.unlinked_events += 1
@@ -213,6 +218,7 @@ def backfill_portfolio(session: Session, portfolio: Portfolio) -> BackfillReport
                 f"Migrated legacy cash transaction {transaction.id}. Whether this settled a trade "
                 "was never recorded, so it is classified as an external flow."
             ),
+            source_reference=transaction.request_id,
         )
         report.cash_transactions_migrated += 1
         report.unlinked_events += 1
