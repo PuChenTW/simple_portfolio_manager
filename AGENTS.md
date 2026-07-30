@@ -19,6 +19,12 @@ the balance validator, `postings.py` performs atomic posting and reversal, and
 `corporate_actions.py` records, previews, and applies issuer events. `backfill.py` migrates legacy
 rows into the journal and is exposed through `cli.py`.
 
+Historical valuation builds on the journal. `replay.py` rebuilds positions, cash, and flow
+totals at any cutoff by folding journal legs, and is the only correct source of past state --
+`positions` and `cash_balances` describe the present. `valuation.py` prices a replayed state
+with history bounded by the valuation date and stores it as a snapshot, plus the re-runnable
+range rebuild behind `portfolio-admin rebuild-snapshots`.
+
 ## Build, Test, and Development Commands
 
 - `uv sync`: create the Python 3.13 environment from `uv.lock`.
@@ -28,6 +34,8 @@ rows into the journal and is exposed through `cli.py`.
   `PORTFOLIO_MCP_TRANSPORT=streamable-http` for the HTTP transport.
 - `uv run portfolio-admin backfill-journal`: migrate legacy trades and cash into journal events.
 - `uv run portfolio-admin verify-journal <portfolio_id>`: compare stored cash against the journal.
+- `uv run portfolio-admin rebuild-snapshots <portfolio_id> <start> <end>`: build daily valuation
+  snapshots over a date range. Safe to re-run; existing dates are skipped.
 - `uv run pytest`: run deterministic tests; live Yahoo tests are skipped.
 - `uv run pytest -m external`: exercise `AAPL`, `2330.TW`, and `BTC-USD` online.
 - `uv run ruff check .`: enforce imports and Python style.
@@ -80,3 +88,7 @@ Three invariants govern the data-transparency work and must not be weakened:
    replacing it, so retracting the override restores the original.
 3. **Never post half an event.** Legs and their position/cash projections commit in one
    transaction, and posted events are corrected by reversal, never by edit or delete.
+4. **Never value a date with a later price.** Snapshots replay the journal to the cutoff and
+   price it from history bounded by that date. A holding with no price on or before the date is
+   excluded from `securities_value`, carried at cost in `unpriced_market_value`, and makes the
+   snapshot `partial`; a missing date in a series is reported, never interpolated.

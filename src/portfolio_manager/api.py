@@ -1,3 +1,4 @@
+import json
 from datetime import date, datetime
 from pathlib import Path as FilePath
 from typing import Annotated
@@ -56,10 +57,17 @@ from .schemas import (
     JournalEventRead,
     JournalLegRead,
     MarketInstrumentRead,
+    NavHistoryRead,
     PortfolioCreate,
     PortfolioRead,
     PortfolioSummary,
     PositionList,
+    PositionSnapshotRead,
+    RebuildRead,
+    RebuildRequest,
+    SnapshotCreate,
+    SnapshotRead,
+    SnapshotSummary,
     TagMode,
     TagsRead,
     TagsUpdate,
@@ -83,6 +91,16 @@ from .services import (
     normalize_tag,
     page_total,
     replace_tags,
+)
+from .valuation import (
+    CALCULATION_VERSION,
+    SnapshotStatus,
+    create_snapshot,
+    list_snapshots,
+    missing_dates,
+    rebuild_snapshots,
+    snapshot_positions,
+    snapshot_warnings,
 )
 
 API_DESCRIPTION = """
@@ -196,6 +214,15 @@ OPENAPI_TAGS = [
             "portfolio are separate steps, with a preview in between. Actions whose cost-basis "
             "treatment depends on undisclosed or jurisdiction-specific rules are reported as "
             "unresolved rather than applied with an invented allocation."
+        ),
+    },
+    {
+        "name": "valuation",
+        "description": (
+            "Point-in-time snapshots of what a portfolio was worth. Holdings and cash are "
+            "rebuilt from the journal at the cutoff and priced with data available on that date, "
+            "never with today's quote. A holding that cannot be priced is excluded and the "
+            "snapshot reported as partial, rather than being valued at zero."
         ),
     },
 ]
@@ -1340,3 +1367,217 @@ def put_instrument_issuer(
     profile = build_instrument_profile(session, reference)
     session.commit()
     return profile
+
+
+CALCULATION_METHOD = (
+    "Holdings and cash are rebuilt by folding the journal to the valuation cutoff, then priced "
+    "with the last close on or before that date. Prices after the cutoff are never used. "
+    "Holdings without an available price are excluded from securities_value and reported in "
+    "unpriced_market_value at cost, which makes the snapshot partial."
+)
+
+
+def _snapshot_payload(session: Session, snapshot) -> SnapshotRead:
+    return SnapshotRead(
+        id=snapshot.id,
+        portfolio_id=snapshot.portfolio_id,
+        valuation_date=snapshot.valuation_date.date(),
+        valuation_as_of=snapshot.valuation_as_of,
+        base_currency=snapshot.base_currency,
+        securities_value=snapshot.securities_value,
+        unpriced_market_value=snapshot.unpriced_market_value,
+        cash_value=snapshot.cash_value,
+        total_value=snapshot.total_value,
+        cost_basis=snapshot.cost_basis,
+        external_flow_amount=snapshot.external_flow_amount,
+        income_amount=snapshot.income_amount,
+        fee_amount=snapshot.fee_amount,
+        tax_amount=snapshot.tax_amount,
+        pricing_coverage_percent=snapshot.pricing_coverage_percent,
+        positions_total=snapshot.positions_total,
+        positions_priced=snapshot.positions_priced,
+        has_unlinked_legacy_events=snapshot.has_unlinked_legacy_events,
+        calculation_version=snapshot.calculation_version,
+        status=snapshot.status,
+        calculation_method=CALCULATION_METHOD,
+        warnings=snapshot_warnings(snapshot),
+        positions=[
+            PositionSnapshotRead(
+                instrument_id=row.instrument_id,
+                ticker_at_time=row.ticker_at_time,
+                quantity=row.quantity,
+                average_cost=row.average_cost,
+                cost_basis=row.cost_basis,
+                local_currency=row.local_currency,
+                price=row.price,
+                market_value=row.market_value,
+                price_as_of=row.price_as_of,
+                price_provider=row.price_provider,
+                price_stale=row.price_stale,
+                warnings=json.loads(row.warnings) if row.warnings else [],
+            )
+            for row in snapshot_positions(session, snapshot.id)
+        ],
+        created_at=snapshot.created_at,
+    )
+
+
+@app.post(
+    "/api/v1/portfolios/{portfolio_id}/valuation-snapshots",
+    response_model=SnapshotRead,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="create_valuation_snapshot",
+    summary="Value a portfolio on one date",
+    response_description="The stored snapshot with its per-holding pricing detail",
+    tags=["valuation"],
+)
+def post_valuation_snapshot(
+    portfolio_id: PortfolioId,
+    data: SnapshotCreate,
+    session: SessionDep,
+    provider: ProviderDep,
+) -> SnapshotRead:
+    """
+    Record what this portfolio was worth on a date, using only data available then.
+
+    Positions and cash are rebuilt from the journal rather than read from current balances, and
+    prices come from history bounded by the valuation date, so a backfilled series cannot borrow
+    knowledge from later trading. Repeating the call for a date returns the stored snapshot;
+    pass `force_revision` to replace it deliberately.
+
+    A holding with no price on or before the date is excluded from `securities_value`, carried at
+    cost in `unpriced_market_value`, and makes `status` partial. Check `status`, `warnings`, and
+    `has_unlinked_legacy_events` before treating the total as authoritative.
+    """
+    snapshot = create_snapshot(
+        session,
+        portfolio_id,
+        data.valuation_date,
+        provider,
+        force_revision=data.force_revision,
+    )
+    return _snapshot_payload(session, snapshot)
+
+
+@app.post(
+    "/api/v1/portfolios/{portfolio_id}/valuation-snapshots/rebuild",
+    response_model=RebuildRead,
+    status_code=status.HTTP_200_OK,
+    operation_id="rebuild_valuation_snapshots",
+    summary="Build snapshots across a date range",
+    response_description="Counts of what was created, skipped, partial, and failed",
+    tags=["valuation"],
+)
+def post_rebuild_snapshots(
+    portfolio_id: PortfolioId,
+    data: RebuildRequest,
+    session: SessionDep,
+    provider: ProviderDep,
+) -> RebuildRead:
+    """
+    Fill in a range of daily snapshots as a bounded, re-runnable job.
+
+    Dates that already have a snapshot are skipped, so an interrupted run is recovered by simply
+    repeating it. A date that fails is recorded in `failed` and does not abandon the rest of the
+    range. Each instrument's history is fetched once for the whole range rather than once per day.
+    """
+    report = rebuild_snapshots(
+        session,
+        portfolio_id,
+        data.start_date,
+        data.end_date,
+        provider,
+        force_revision=data.force_revision,
+    )
+    return RebuildRead(
+        portfolio_id=report.portfolio_id,
+        start_date=report.start_date,
+        end_date=report.end_date,
+        calculation_version=report.calculation_version,
+        created=report.created,
+        skipped_existing=report.skipped_existing,
+        partial=report.partial,
+        failed=report.failed,
+        warnings=report.warnings,
+    )
+
+
+@app.get(
+    "/api/v1/portfolios/{portfolio_id}/nav-history",
+    response_model=NavHistoryRead,
+    operation_id="get_nav_history",
+    summary="Read the daily value series",
+    response_description="Stored snapshots in the range, with the dates that have none",
+    tags=["valuation"],
+)
+def get_nav_history(
+    portfolio_id: PortfolioId,
+    session: SessionDep,
+    start_date: Annotated[date, Query(description="First valuation date, inclusive.")],
+    end_date: Annotated[date, Query(description="Last valuation date, inclusive.")],
+) -> NavHistoryRead:
+    """
+    Return the stored daily series for a range.
+
+    This reads snapshots; it does not create them. Dates without a snapshot are listed in
+    `missing_dates` rather than interpolated, because a filled-in value would be
+    indistinguishable from one that was actually computed. Build them with
+    `rebuild_valuation_snapshots` first if the series needs to be complete.
+    """
+    portfolio = get_portfolio(session, portfolio_id)
+    if start_date > end_date:
+        raise DomainError(
+            422,
+            "invalid_date_range",
+            "start_date must not be after end_date",
+            {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
+        )
+
+    snapshots = list_snapshots(session, portfolio_id, start_date, end_date)
+    absent = missing_dates(snapshots, start_date, end_date)
+    partial = [item for item in snapshots if item.status == SnapshotStatus.PARTIAL]
+
+    warnings: list[str] = []
+    if absent:
+        warnings.append(
+            f"{len(absent)} dates in this range have no snapshot and are reported as missing "
+            "rather than interpolated"
+        )
+    if partial:
+        warnings.append(
+            f"{len(partial)} snapshots are partial because at least one holding could not be "
+            "priced on that date"
+        )
+    if any(item.has_unlinked_legacy_events for item in snapshots):
+        warnings.append(
+            "This portfolio contains migrated rows whose trade-to-cash linkage was never "
+            "recorded, so cash and any return derived from it are unreliable"
+        )
+
+    return NavHistoryRead(
+        portfolio_id=portfolio_id,
+        base_currency=portfolio.base_currency,
+        start_date=start_date,
+        end_date=end_date,
+        calculation_version=CALCULATION_VERSION,
+        calculation_method=CALCULATION_METHOD,
+        snapshots=[
+            SnapshotSummary(
+                id=item.id,
+                valuation_date=item.valuation_date.date(),
+                valuation_as_of=item.valuation_as_of,
+                securities_value=item.securities_value,
+                unpriced_market_value=item.unpriced_market_value,
+                cash_value=item.cash_value,
+                total_value=item.total_value,
+                external_flow_amount=item.external_flow_amount,
+                pricing_coverage_percent=item.pricing_coverage_percent,
+                status=item.status,
+                has_unlinked_legacy_events=item.has_unlinked_legacy_events,
+            )
+            for item in snapshots
+        ],
+        missing_dates=absent,
+        partial_snapshots=len(partial),
+        warnings=warnings,
+    )

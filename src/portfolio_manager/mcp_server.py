@@ -646,6 +646,81 @@ async def map_instrument_issuer(
     return await _request("PUT", f"/api/v1/instruments/{reference}/issuer", json=payload)
 
 
+@mcp.tool()
+async def create_valuation_snapshot(
+    portfolio_id: str,
+    valuation_date: str,
+    force_revision: bool = False,
+) -> dict[str, Any]:
+    """Record what a portfolio was worth on one date, priced with data available then.
+
+    `valuation_date` is `YYYY-MM-DD` and must not be in the future. Holdings and cash are rebuilt
+    from the journal at that date rather than read from current balances, and prices come from
+    history bounded by the date, so a snapshot never borrows knowledge from later trading.
+
+    Repeating the call for a date returns the stored snapshot rather than recomputing it; pass
+    `force_revision=true` only to deliberately replace figures known to be wrong.
+
+    Read `status` before using the total. A `partial` snapshot means at least one holding had no
+    price on that date: it is excluded from `securities_value` and carried at cost in
+    `unpriced_market_value`, so the total understates the portfolio by an amount you can see.
+    Check `has_unlinked_legacy_events` too -- when true, cash came from migrated rows whose
+    settlement linkage was never recorded.
+    """
+    payload = {"valuation_date": valuation_date, "force_revision": force_revision}
+    return await _request(
+        "POST", f"/api/v1/portfolios/{portfolio_id}/valuation-snapshots", json=payload
+    )
+
+
+@mcp.tool()
+async def rebuild_valuation_snapshots(
+    portfolio_id: str,
+    start_date: str,
+    end_date: str,
+    force_revision: bool = False,
+) -> dict[str, Any]:
+    """Build a range of daily snapshots as a re-runnable job.
+
+    Dates are `YYYY-MM-DD` and inclusive. Dates that already have a snapshot are skipped, so an
+    interrupted run is recovered by calling this again with the same range. A date that fails is
+    listed in `failed` without abandoning the rest of the range.
+
+    Use this before `get_nav_history`, which only reads what has already been built. Prefer one
+    call spanning the whole range over many single-date calls: history is fetched once per
+    instrument for the range rather than once per day.
+    """
+    payload = {
+        "start_date": start_date,
+        "end_date": end_date,
+        "force_revision": force_revision,
+    }
+    return await _request(
+        "POST", f"/api/v1/portfolios/{portfolio_id}/valuation-snapshots/rebuild", json=payload
+    )
+
+
+@mcp.tool()
+async def get_nav_history(
+    portfolio_id: str,
+    start_date: str,
+    end_date: str,
+) -> dict[str, Any]:
+    """Read the stored daily value series for a date range.
+
+    This reads snapshots and does not create them: dates never built appear in `missing_dates`
+    rather than being interpolated, because an invented value would be indistinguishable from a
+    computed one. Call `rebuild_valuation_snapshots` first when the series must be complete.
+
+    Before drawing conclusions from the series, check `missing_dates`, `partial_snapshots`, and
+    `warnings`. A series with gaps or partial days is not a valid basis for comparing periods.
+    """
+    params = {"start_date": start_date, "end_date": end_date}
+    return await _request(
+        "GET", f"/api/v1/portfolios/{portfolio_id}/nav-history", params=params
+    )
+
+
 def main() -> None:
     transport = os.getenv("PORTFOLIO_MCP_TRANSPORT", "stdio")
     if transport == "streamable-http":

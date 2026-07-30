@@ -853,6 +853,148 @@ class CorporateActionApplicationRead(ApiModel):
     created_at: datetime
 
 
+class SnapshotCreate(ApiModel):
+    """Request to value one portfolio on one date."""
+
+    valuation_date: date = Field(
+        description="The date to value, in the portfolio's terms. Must not be in the future."
+    )
+    force_revision: bool = Field(
+        default=False,
+        description=(
+            "Replace an existing snapshot for this date instead of returning it. Use only when "
+            "the stored figures are known to be wrong; a normal retry should leave them alone."
+        ),
+    )
+
+
+class PositionSnapshotRead(ApiModel):
+    """One holding inside a snapshot, with the price actually used."""
+
+    instrument_id: str
+    ticker_at_time: str = Field(
+        description="The ticker as it stood on the valuation date, which may differ from today's."
+    )
+    quantity: Decimal
+    average_cost: Decimal
+    cost_basis: Decimal
+    local_currency: str
+    price: Decimal | None = Field(
+        description="Null when no price was available on or before the valuation date."
+    )
+    market_value: Decimal | None = Field(
+        description="Null whenever `price` is null; an unpriced holding is never valued at zero."
+    )
+    price_as_of: datetime | None
+    price_provider: str | None
+    price_stale: bool = Field(
+        description="True when the price was carried forward across a long gap in the data."
+    )
+    warnings: list[str]
+
+
+class SnapshotRead(ApiModel):
+    """A portfolio's value on one date, priced only with data available at that time."""
+
+    id: str
+    portfolio_id: str
+    valuation_date: date
+    valuation_as_of: datetime = Field(
+        description="The cutoff instant; events after it are excluded from this snapshot."
+    )
+    base_currency: str
+    securities_value: Decimal = Field(
+        description="Priced holdings only. Holdings that could not be priced are excluded."
+    )
+    unpriced_market_value: Decimal = Field(
+        description="Cost basis of holdings with no available price, so the gap stays visible."
+    )
+    cash_value: Decimal
+    total_value: Decimal
+    cost_basis: Decimal
+    external_flow_amount: Decimal = Field(
+        description="Net investor contributions, excluding income, fees, and trading."
+    )
+    income_amount: Decimal
+    fee_amount: Decimal
+    tax_amount: Decimal
+    pricing_coverage_percent: Decimal
+    positions_total: int
+    positions_priced: int
+    has_unlinked_legacy_events: bool = Field(
+        description=(
+            "True when this portfolio contains migrated rows whose trade-to-cash linkage was "
+            "never recorded, which makes cash and any return derived from it unreliable."
+        )
+    )
+    calculation_version: str
+    status: str = Field(description="`complete` when every holding was priced, else `partial`.")
+    calculation_method: str
+    warnings: list[str]
+    positions: list[PositionSnapshotRead]
+    created_at: datetime
+
+
+class SnapshotSummary(ApiModel):
+    """One snapshot without its position detail, for series responses."""
+
+    id: str
+    valuation_date: date
+    valuation_as_of: datetime
+    securities_value: Decimal
+    unpriced_market_value: Decimal
+    cash_value: Decimal
+    total_value: Decimal
+    external_flow_amount: Decimal
+    pricing_coverage_percent: Decimal
+    status: str
+    has_unlinked_legacy_events: bool
+
+
+class NavHistoryRead(ApiModel):
+    """A daily value series with the coverage needed to judge whether it can be trusted."""
+
+    portfolio_id: str
+    base_currency: str
+    start_date: date
+    end_date: date
+    calculation_version: str
+    calculation_method: str
+    snapshots: list[SnapshotSummary]
+    missing_dates: list[date] = Field(
+        description="Dates in range with no snapshot; they are reported, never interpolated."
+    )
+    partial_snapshots: int
+    warnings: list[str]
+
+
+class RebuildRequest(ApiModel):
+    """Request to build snapshots across a date range."""
+
+    start_date: date
+    end_date: date
+    force_revision: bool = Field(
+        default=False,
+        description="Rewrite dates that already have a snapshot rather than skipping them.",
+    )
+
+
+class RebuildRead(ApiModel):
+    """The outcome of a range rebuild, in enough detail to re-run it safely."""
+
+    portfolio_id: str
+    start_date: date
+    end_date: date
+    calculation_version: str
+    created: int
+    skipped_existing: int = Field(
+        description="Dates left untouched because a snapshot already existed."
+    )
+    partial: int
+    failed: list[str]
+    warnings: list[str]
+
+
 class ErrorResponse(ApiModel):
     """Stable machine-readable error envelope used for validation and domain failures."""
 

@@ -8,6 +8,7 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -342,6 +343,92 @@ class CorporateActionApplication(Base):
     status: Mapped[str] = mapped_column(String(15), nullable=False)
     warnings: Mapped[str | None] = mapped_column(Text())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PortfolioValuationSnapshot(Base):
+    """What a portfolio was worth on one date, priced with data available at that time.
+
+    A snapshot is an auditable record of a computation, not a second source of truth: it can
+    always be rebuilt from the journal plus point-in-time market data. `calculation_version`
+    exists so a later methodology change produces a new revision that can be compared against the
+    old one, rather than silently restating history.
+
+    `status` is `partial` whenever any holding could not be priced. The unpriced value is carried
+    in `unpriced_market_value` and excluded from `securities_value`, because substituting zero
+    for an unknown price would understate the portfolio while looking like a real number.
+    """
+
+    __tablename__ = "portfolio_valuation_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "portfolio_id",
+            "valuation_date",
+            "calculation_version",
+            name="uq_valuation_snapshot_revision",
+        ),
+        Index("ix_valuation_snapshots_portfolio_date", "portfolio_id", "valuation_date"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    portfolio_id: Mapped[str] = mapped_column(
+        ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False
+    )
+    valuation_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    valuation_as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    base_currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    securities_value: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
+    unpriced_market_value: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
+    cash_value: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
+    total_value: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
+    cost_basis: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
+    external_flow_amount: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
+    income_amount: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
+    fee_amount: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
+    tax_amount: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
+    pricing_coverage_percent: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
+    positions_total: Mapped[int] = mapped_column(Integer(), nullable=False)
+    positions_priced: Mapped[int] = mapped_column(Integer(), nullable=False)
+    # Carried from the replay so a reader can see the journal was incomplete for this portfolio.
+    has_unlinked_legacy_events: Mapped[bool] = mapped_column(
+        Boolean(), nullable=False, default=False
+    )
+    calculation_version: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(10), nullable=False)
+    warnings: Mapped[str | None] = mapped_column(Text())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PositionValuationSnapshot(Base):
+    """One holding inside a snapshot, with the price and its provenance.
+
+    `ticker_at_time` is stored alongside `instrument_id` because tickers change: reading the
+    current ticker back onto a historical row would relabel the past.
+    """
+
+    __tablename__ = "position_valuation_snapshots"
+    __table_args__ = (
+        Index("ix_position_snapshots_parent", "portfolio_snapshot_id"),
+        Index("ix_position_snapshots_instrument", "instrument_id", "valuation_date"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    portfolio_snapshot_id: Mapped[str] = mapped_column(
+        ForeignKey("portfolio_valuation_snapshots.id", ondelete="CASCADE"), nullable=False
+    )
+    instrument_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    ticker_at_time: Mapped[str] = mapped_column(String(30), nullable=False)
+    valuation_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    quantity: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
+    average_cost: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
+    cost_basis: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
+    local_currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    # Null when no price was available at the cutoff; market_value is then null too, never zero.
+    price: Mapped[Decimal | None] = mapped_column(DecimalText())
+    market_value: Mapped[Decimal | None] = mapped_column(DecimalText())
+    price_as_of: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    price_provider: Mapped[str | None] = mapped_column(String(60))
+    price_stale: Mapped[bool] = mapped_column(Boolean(), nullable=False, default=False)
+    warnings: Mapped[str | None] = mapped_column(Text())
 
 
 class QuoteCache(Base):
