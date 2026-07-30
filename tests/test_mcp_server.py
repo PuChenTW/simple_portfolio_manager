@@ -16,12 +16,15 @@ from portfolio_manager.mcp_server import (
     ApiError,
     create_portfolio,
     delete_portfolio,
+    get_instrument_profile,
     get_market_history,
     get_portfolio,
     get_technical_snapshot,
     list_portfolios,
+    map_instrument_issuer,
     record_cash_transaction,
     record_trade,
+    set_instrument_classification_override,
 )
 
 pytestmark = pytest.mark.anyio
@@ -149,3 +152,49 @@ async def test_market_research_error_preserves_api_envelope(mcp_client) -> None:
     assert excinfo.value.code == "market_data_unavailable"
     assert excinfo.value.details["ticker"] == "UNKNOWN"
     assert excinfo.value.details["as_of"] == "2026-07-24"
+
+
+async def test_registered_tools_cover_every_api_operation() -> None:
+    """Each REST operation_id must have a matching MCP tool, per the repository guidelines."""
+    tools = {tool.name for tool in await mcp_server.mcp.list_tools()}
+    operations = {
+        route.operation_id for route in app.routes if getattr(route, "operation_id", None)
+    }
+    assert operations <= tools, f"API operations without an MCP tool: {operations - tools}"
+
+
+async def test_instrument_identity_tools_round_trip(mcp_client) -> None:
+    profile = await get_instrument_profile("GLD")
+    assert profile["classification"]["security_type"]["value"] == "etf"
+    assert profile["classification"]["asset_class"]["value"] == "unclassified"
+
+    corrected = await set_instrument_classification_override(
+        reference="GLD",
+        request_id="gld-mcp-1",
+        field="asset_class",
+        value="commodity",
+        reason="SPDR Gold Shares holds allocated gold bullion",
+    )
+    assert corrected["classification"]["asset_class"]["value"] == "commodity"
+    assert corrected["classification"]["asset_class"]["provenance"] == "manual_override"
+
+    mapped = await map_instrument_issuer(
+        reference="TSM",
+        request_id="tsm-mcp-1",
+        legal_name="Taiwan Semiconductor Manufacturing Company Limited",
+        display_name="TSMC",
+        country_of_domicile="TW",
+    )
+    assert mapped["issuer"]["display_name"] == "TSMC"
+
+
+async def test_classification_override_error_preserves_api_envelope(mcp_client) -> None:
+    with pytest.raises(ApiError) as excinfo:
+        await set_instrument_classification_override(
+            reference="AAPL",
+            request_id="bad-mcp-1",
+            field="asset_class",
+            value="not_a_member",
+            reason="typo protection",
+        )
+    assert excinfo.value.code == "invalid_classification_value"

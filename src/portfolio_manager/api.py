@@ -12,16 +12,25 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .db import get_session
 from .errors import DomainError
+from .identity import (
+    build_instrument_profile,
+    map_issuer,
+    resolve_instrument,
+    set_classification_override,
+)
 from .market import HistoryAdjustment, HistoryInterval, MarketProvider, YahooMarketProvider
 from .models import CashTransaction, Portfolio, Trade
 from .schemas import (
     CashTransactionCreate,
     CashTransactionPage,
     CashTransactionRead,
+    ClassificationOverrideUpdate,
     ErrorResponse,
     HealthRead,
     HistoryBarRead,
     HistoryRead,
+    InstrumentProfileRead,
+    IssuerMappingUpdate,
     MarketInstrumentRead,
     PortfolioCreate,
     PortfolioRead,
@@ -122,6 +131,14 @@ OPENAPI_TAGS = [
         "description": (
             "Resolve Yahoo-compatible tickers and read timestamped quotes, reproducible history, "
             "and technical research snapshots. Indicators may be null when history is insufficient."
+        ),
+    },
+    {
+        "name": "instruments",
+        "description": (
+            "Stable instrument identity, issuer mapping, and asset classification. Every "
+            "classification field reports the provenance that produced it; unresolved fields stay "
+            "unclassified and are reported in warnings instead of being guessed."
         ),
     },
 ]
@@ -746,3 +763,133 @@ def read_technical_snapshot(
     evidence together with fundamentals, valuation, and other market evidence.
     """
     return market.technical_snapshot(ticker, as_of, benchmark, event_date, lookback_years)
+
+
+InstrumentRef = Annotated[
+    str,
+    Path(
+        description="Ticker, stable instrument_id, or a known provider alias.",
+        examples=["GLD"],
+    ),
+]
+
+
+def _resolve_or_fetch(session: Session, market: MarketService, reference: str) -> None:
+    """Ensure an instrument exists locally, resolving a first-time ticker via the provider.
+
+    Classifying or mapping a symbol the service has not traded yet is a normal first step, so all
+    instrument routes accept an unseen ticker rather than forcing a lookup call first.
+    """
+    try:
+        resolve_instrument(session, reference)
+    except DomainError:
+        market.get(reference)  # Persists identity, or raises market_data_unavailable.
+
+
+@app.get(
+    "/api/v1/instruments/{reference}/profile",
+    response_model=InstrumentProfileRead,
+    operation_id="get_instrument_profile",
+    summary="Read stable identity, issuer, and classification provenance",
+    response_description="Instrument identity with per-field classification sources",
+    responses={
+        404: {"model": ErrorResponse, "description": "`instrument_not_found` for the reference."}
+    },
+    tags=["instruments"],
+)
+def read_instrument_profile(reference: InstrumentRef, session: SessionDep, market: MarketDep):
+    """
+    Resolve an instrument and inspect how each classification field was decided.
+
+    Every field reports the `provenance` that won it, so a provider guess is distinguishable from
+    a verified mapping or a manual override. Fields that could not be resolved are absent and
+    listed in `warnings` rather than being filled with an assumed value. An unknown ticker is
+    resolved through the market provider first so a first-time symbol still returns a profile.
+    """
+    _resolve_or_fetch(session, market, reference)
+    profile = build_instrument_profile(session, reference)
+    session.commit()
+    return profile
+
+
+@app.put(
+    "/api/v1/instruments/{reference}/classification",
+    response_model=InstrumentProfileRead,
+    operation_id="set_instrument_classification_override",
+    summary="Manually correct one classification field",
+    response_description="The instrument profile after applying the override",
+    responses={
+        404: {
+            "model": ErrorResponse,
+            "description": "`instrument_not_found`, or `classification_override_not_found`.",
+        }
+    },
+    tags=["instruments"],
+)
+def put_instrument_classification(
+    reference: InstrumentRef,
+    data: ClassificationOverrideUpdate,
+    session: SessionDep,
+    market: MarketDep,
+) -> InstrumentProfileRead:
+    """
+    Override one classification field when provider metadata is wrong or too coarse.
+
+    The provider's own value is never modified or deleted; the override simply outranks it, and
+    setting `retract` to true restores the provider-derived value. `reason` is retained for audit.
+    """
+    _resolve_or_fetch(session, market, reference)
+    set_classification_override(
+        session,
+        reference,
+        field=data.field,
+        value=data.value,
+        reason=data.reason,
+        effective_at=data.effective_at,
+        retract=data.retract,
+    )
+    profile = build_instrument_profile(session, reference)
+    session.commit()
+    return profile
+
+
+@app.put(
+    "/api/v1/instruments/{reference}/issuer",
+    response_model=InstrumentProfileRead,
+    operation_id="map_instrument_issuer",
+    summary="Map an instrument to its issuing entity",
+    response_description="The instrument profile after linking the issuer",
+    responses={
+        404: {
+            "model": ErrorResponse,
+            "description": "`instrument_not_found` or `issuer_not_found` for an explicit id.",
+        }
+    },
+    tags=["instruments"],
+)
+def put_instrument_issuer(
+    reference: InstrumentRef,
+    data: IssuerMappingUpdate,
+    session: SessionDep,
+    market: MarketDep,
+) -> InstrumentProfileRead:
+    """
+    Link a listing to the entity that issued it so cross-listing exposure can be aggregated.
+
+    Separate listings of one company (an ADR and its local line) remain separate instruments with
+    their own prices and currencies; only the issuer link is shared. Supplying an existing
+    `issuer_id` attaches to that entity; otherwise one is matched or created by `legal_name`.
+    """
+    _resolve_or_fetch(session, market, reference)
+    map_issuer(
+        session,
+        reference,
+        legal_name=data.legal_name,
+        display_name=data.display_name,
+        country_of_domicile=data.country_of_domicile,
+        lei=data.lei,
+        issuer_id=data.issuer_id,
+    )
+    profile = build_instrument_profile(session, reference)
+    session.commit()
+    return profile

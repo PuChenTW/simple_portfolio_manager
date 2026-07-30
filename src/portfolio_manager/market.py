@@ -20,6 +20,9 @@ class InstrumentSnapshot:
     market: str
     exchange: str | None
     currency: str
+    # Raw provider structural hint (Yahoo `quoteType`). `asset_type` collapses this to
+    # stock/crypto for the legacy contract; the taxonomy needs the unreduced value.
+    quote_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -182,6 +185,7 @@ def _metadata(symbol: str, info: dict[str, object]) -> InstrumentSnapshot:
         market=market,
         exchange=str(exchange) if exchange else None,
         currency=currency,
+        quote_type=quote_type or None,
     )
 
 

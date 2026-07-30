@@ -3,6 +3,7 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
@@ -39,15 +40,96 @@ class Portfolio(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class Issuer(Base):
+    """The economic entity behind one or more listings (TSM and 2330.TW share one)."""
+
+    __tablename__ = "issuers"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    legal_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    country_of_domicile: Mapped[str | None] = mapped_column(String(2))
+    lei: Mapped[str | None] = mapped_column(String(20))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class Instrument(Base):
+    """A tradable listing.
+
+    `ticker` stays the primary key so every existing foreign key and tool response is unaffected.
+    `instrument_id` is an additive stable surrogate that new identity-aware features reference;
+    it is unique and backfilled for every pre-existing row.
+    """
+
     __tablename__ = "instruments"
 
     ticker: Mapped[str] = mapped_column(String(32), primary_key=True)
+    instrument_id: Mapped[str] = mapped_column(String(36), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     asset_type: Mapped[str] = mapped_column(String(16), nullable=False)
     market: Mapped[str] = mapped_column(String(16), nullable=False)
     exchange: Mapped[str | None] = mapped_column(String(100))
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    issuer_id: Mapped[str | None] = mapped_column(ForeignKey("issuers.id", ondelete="SET NULL"))
+    is_fund: Mapped[bool] = mapped_column(Boolean(), nullable=False, default=False)
+    active_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    active_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class InstrumentAlias(Base):
+    """Provider-specific symbols that resolve to one instrument, including retired tickers."""
+
+    __tablename__ = "instrument_aliases"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider", "provider_symbol", "effective_from", name="uq_alias_provider_symbol"
+        ),
+        Index("ix_instrument_aliases_instrument", "instrument_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    instrument_id: Mapped[str] = mapped_column(
+        ForeignKey("instruments.instrument_id", ondelete="CASCADE"), nullable=False
+    )
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    provider_symbol: Mapped[str] = mapped_column(String(32), nullable=False)
+    exchange: Mapped[str | None] = mapped_column(String(100))
+    effective_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    effective_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class InstrumentClassification(Base):
+    """One classification field's value with its provenance.
+
+    Rows are append-only per (instrument, field, provenance): a manual override never edits or
+    deletes the provider's row, it outranks it. Retracting an override restores the provider view.
+    """
+
+    __tablename__ = "instrument_classifications"
+    __table_args__ = (
+        UniqueConstraint(
+            "instrument_id", "field", "provenance", name="uq_classification_field_provenance"
+        ),
+        Index("ix_instrument_classifications_instrument", "instrument_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    instrument_id: Mapped[str] = mapped_column(
+        ForeignKey("instruments.instrument_id", ondelete="CASCADE"), nullable=False
+    )
+    field: Mapped[str] = mapped_column(String(50), nullable=False)
+    value: Mapped[str | None] = mapped_column(String(100))
+    provenance: Mapped[str] = mapped_column(String(20), nullable=False)
+    source: Mapped[str] = mapped_column(String(100), nullable=False)
+    effective_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    confidence: Mapped[Decimal | None] = mapped_column(DecimalText())
+    note: Mapped[str | None] = mapped_column(Text())
+    is_retracted: Mapped[bool] = mapped_column(Boolean(), nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

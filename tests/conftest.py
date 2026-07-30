@@ -41,6 +41,25 @@ class FakeMarketProvider:
             "2330.TW": Decimal("1100"),
             "8069.TWO": Decimal("190"),
             "BTC-USD": Decimal("100000"),
+            # Plan 4.6 cases: instruments Yahoo's coarse metadata misreports.
+            "VOO": Decimal("520"),
+            "VT": Decimal("120"),
+            "SOXX": Decimal("240"),
+            "GLD": Decimal("250"),
+            "BOXX": Decimal("110"),
+            "USDT-USD": Decimal("1"),
+            "TSM": Decimal("180"),
+        }
+        # Yahoo reports these through `quoteType`; it distinguishes funds from equities but says
+        # nothing about what a fund actually holds.
+        self.quote_types = {
+            "VOO": "ETF",
+            "VT": "ETF",
+            "SOXX": "ETF",
+            "GLD": "ETF",
+            "BOXX": "ETF",
+            "USDT-USD": "CRYPTOCURRENCY",
+            "BTC-USD": "CRYPTOCURRENCY",
         }
 
     def fetch(self, ticker: str) -> MarketSnapshot:
@@ -48,11 +67,12 @@ class FakeMarketProvider:
         if self.fail or ticker not in self.prices:
             raise MarketDataError(f"No fixture for {ticker}")
         currency = "TWD" if ticker.endswith((".TW", ".TWO")) else "USD"
+        quote_type = self.quote_types.get(ticker, "EQUITY")
         if ticker.endswith(".TW"):
             market = "TW"
         elif ticker.endswith(".TWO"):
             market = "TWO"
-        elif ticker.endswith("-USD"):
+        elif quote_type == "CRYPTOCURRENCY":
             market = "CRYPTO"
         else:
             market = "US"
@@ -67,6 +87,7 @@ class FakeMarketProvider:
                 market=market,
                 exchange=market,
                 currency=currency,
+                quote_type=quote_type,
             ),
             quote=QuoteSnapshot(
                 price=price,

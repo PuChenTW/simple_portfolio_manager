@@ -325,6 +325,84 @@ async def get_technical_snapshot(
     )
 
 
+# --- Instruments ------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_instrument_profile(reference: str) -> dict[str, Any]:
+    """Read an instrument's stable ID, issuer, and how each classification field was decided.
+
+    `reference` is a ticker, a stable instrument_id, or a known provider alias. Use this instead of
+    assuming an asset's type: `get_market_instrument.asset_type` is a coarse legacy field that
+    reports every non-crypto symbol as "stock", so an ETF like VOO or a commodity trust like GLD is
+    indistinguishable there. Each entry in `classification` carries a `provenance` -- prefer
+    manual_override and verified_internal over provider and derived. Fields that could not be
+    resolved are absent and explained in `warnings`; treat them as unknown, not as a default.
+    """
+    return await _request("GET", f"/api/v1/instruments/{reference}/profile")
+
+
+@mcp.tool()
+async def set_instrument_classification_override(
+    reference: str,
+    request_id: str,
+    field: str,
+    reason: str,
+    value: str | None = None,
+    effective_at: str | None = None,
+    retract: bool = False,
+) -> dict[str, Any]:
+    """Manually correct one classification field when provider metadata is wrong or too coarse.
+
+    `field` is one of asset_class, security_type, sub_asset_class, country_of_risk, or
+    is_cash_equivalent. `value` must be a taxonomy member for that field. The provider's own value
+    is never modified, only outranked, so passing `retract=true` restores it. `reason` is retained
+    for audit; state the evidence rather than a bare assertion. `effective_at` is RFC 3339.
+    """
+    payload: dict[str, Any] = {
+        "request_id": request_id,
+        "field": field,
+        "value": value,
+        "reason": reason,
+        "retract": retract,
+    }
+    if effective_at is not None:
+        payload["effective_at"] = effective_at
+    return await _request(
+        "PUT", f"/api/v1/instruments/{reference}/classification", json=payload
+    )
+
+
+@mcp.tool()
+async def map_instrument_issuer(
+    reference: str,
+    request_id: str,
+    legal_name: str,
+    display_name: str | None = None,
+    country_of_domicile: str | None = None,
+    lei: str | None = None,
+    issuer_id: str | None = None,
+) -> dict[str, Any]:
+    """Link a listing to its issuing entity so cross-listing exposure can be aggregated.
+
+    Use this when one company trades under several symbols, such as the ADR TSM and the local line
+    2330.TW. The listings stay separate instruments with their own currencies and prices; only the
+    issuer is shared. Pass an existing `issuer_id` to attach to that entity; otherwise an issuer is
+    matched or created by `legal_name`. Do not map different companies onto one issuer to group
+    them thematically.
+    """
+    payload: dict[str, Any] = {"request_id": request_id, "legal_name": legal_name}
+    for key, value in (
+        ("display_name", display_name),
+        ("country_of_domicile", country_of_domicile),
+        ("lei", lei),
+        ("issuer_id", issuer_id),
+    ):
+        if value is not None:
+            payload[key] = value
+    return await _request("PUT", f"/api/v1/instruments/{reference}/issuer", json=payload)
+
+
 def main() -> None:
     transport = os.getenv("PORTFOLIO_MCP_TRANSPORT", "stdio")
     if transport == "streamable-http":

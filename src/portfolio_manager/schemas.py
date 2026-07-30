@@ -6,6 +6,7 @@ from typing import Annotated, Any
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 from .market import HistoryAdjustment, HistoryInterval
+from .taxonomy import Provenance
 
 PositiveDecimal = Annotated[
     Decimal,
@@ -471,6 +472,111 @@ class PortfolioSummary(ApiModel):
     total_pnl: Decimal
     valuation_as_of: datetime
     warnings: list[str] = Field(default_factory=list)
+
+
+class IssuerRead(ApiModel):
+    """The economic entity behind a listing; shared by ADRs and local lines of one company."""
+
+    id: str
+    legal_name: str
+    display_name: str
+    country_of_domicile: str | None
+    lei: str | None
+
+
+class InstrumentAliasRead(ApiModel):
+    """A provider symbol that resolves to this instrument, including retired tickers."""
+
+    provider: str
+    provider_symbol: str
+    exchange: str | None
+    effective_from: datetime
+    effective_to: datetime | None
+
+
+class ClassificationFieldRead(ApiModel):
+    """One classification field's winning value and the provenance that produced it."""
+
+    value: str | None
+    provenance: Provenance = Field(
+        description=(
+            "Trust rank that won this field: manual_override > verified_internal > provider > "
+            "derived > unclassified."
+        )
+    )
+    source: str
+    effective_at: datetime | None
+    confidence: Decimal | None
+    note: str | None
+
+
+class InstrumentProfileRead(ApiModel):
+    """Stable identity, issuer, and field-level classification provenance for one instrument."""
+
+    instrument_id: str
+    ticker: str
+    name: str
+    currency: str
+    market: str
+    exchange: str | None
+    is_fund: bool
+    asset_type: str = Field(
+        description="Legacy coarse type (stock/crypto). Prefer classification.security_type."
+    )
+    issuer: IssuerRead | None
+    classification: dict[str, ClassificationFieldRead] = Field(
+        description="Resolved value per field. Absent fields are unclassified."
+    )
+    aliases: list[InstrumentAliasRead] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ClassificationOverrideUpdate(ApiModel):
+    """Manually correct one classification field without destroying provider data."""
+
+    request_id: RequestId
+    field: str = Field(
+        description="One of asset_class, security_type, sub_asset_class, country_of_risk, "
+        "is_cash_equivalent.",
+        examples=["asset_class"],
+    )
+    value: str | None = Field(
+        default=None,
+        description="Taxonomy member for the field. Ignored when `retract` is true.",
+        examples=["commodity"],
+    )
+    reason: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=500),
+        Field(description="Why this override exists; retained for audit.", examples=["GLD"]),
+    ]
+    effective_at: datetime | None = Field(
+        default=None, description="When the override takes effect. Defaults to server time."
+    )
+    retract: bool = Field(
+        default=False,
+        description="Retract the existing override, restoring the provider-derived value.",
+    )
+
+
+class IssuerMappingUpdate(ApiModel):
+    """Attach an instrument to an issuer so cross-listing exposure can aggregate."""
+
+    request_id: RequestId
+    legal_name: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=200),
+        Field(examples=["Taiwan Semiconductor Manufacturing Company Limited"]),
+    ]
+    display_name: str | None = Field(default=None, examples=["TSMC"])
+    country_of_domicile: str | None = Field(
+        default=None, description="Two-letter ISO country code.", examples=["TW"]
+    )
+    lei: str | None = Field(default=None, description="Legal Entity Identifier when known.")
+    issuer_id: str | None = Field(
+        default=None,
+        description="Attach to this existing issuer instead of matching or creating by name.",
+    )
 
 
 class ErrorResponse(ApiModel):

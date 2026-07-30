@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .errors import DomainError, not_found
+from .identity import YAHOO_PROVIDER, apply_provider_classification, ensure_alias
 from .market import (
     HistoryAdjustment,
     HistoryInterval,
@@ -296,15 +297,20 @@ class MarketService:
         if instrument is None:
             instrument = Instrument(
                 ticker=data.ticker,
+                instrument_id=str(uuid4()),
                 name=data.name,
                 asset_type=data.asset_type,
                 market=data.market,
                 exchange=data.exchange,
                 currency=data.currency,
+                is_fund=False,
+                active_from=now,
                 created_at=now,
                 updated_at=now,
             )
             self.session.add(instrument)
+            self.session.flush()
+            ensure_alias(self.session, instrument, YAHOO_PROVIDER, data.ticker)
         else:
             instrument.name = data.name
             instrument.asset_type = data.asset_type
@@ -312,6 +318,8 @@ class MarketService:
             instrument.exchange = data.exchange
             instrument.currency = data.currency
             instrument.updated_at = now
+        # Refreshes only the DERIVED rank; manual overrides and verified mappings still win.
+        apply_provider_classification(self.session, instrument, data.quote_type)
         return instrument
 
     def _save_quote(self, snapshot: MarketSnapshot, now: datetime) -> QuoteCache:
