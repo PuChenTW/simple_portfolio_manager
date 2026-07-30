@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path as FilePath
 from typing import Annotated
 
@@ -20,7 +20,15 @@ from .identity import (
 )
 from .market import HistoryAdjustment, HistoryInterval, MarketProvider, YahooMarketProvider
 from .models import CashTransaction, Portfolio, Trade
+from .postings import (
+    TransactionRequest,
+    event_detail,
+    list_events,
+    record_transaction,
+    reverse_transaction,
+)
 from .schemas import (
+    BalanceRead,
     CashTransactionCreate,
     CashTransactionPage,
     CashTransactionRead,
@@ -31,6 +39,10 @@ from .schemas import (
     HistoryRead,
     InstrumentProfileRead,
     IssuerMappingUpdate,
+    JournalEventDetail,
+    JournalEventPage,
+    JournalEventRead,
+    JournalLegRead,
     MarketInstrumentRead,
     PortfolioCreate,
     PortfolioRead,
@@ -43,6 +55,8 @@ from .schemas import (
     TradeCreate,
     TradePage,
     TradeRead,
+    TransactionCreate,
+    TransactionReverse,
     utc_now,
 )
 from .services import (
@@ -139,6 +153,14 @@ OPENAPI_TAGS = [
             "Stable instrument identity, issuer mapping, and asset classification. Every "
             "classification field reports the provenance that produced it; unresolved fields stay "
             "unclassified and are reported in warnings instead of being guessed."
+        ),
+    },
+    {
+        "name": "journal",
+        "description": (
+            "Atomic double-entry ledger. A transaction posts its security, cash, fee, and tax "
+            "legs together or not at all, so a position can never move without its settlement. "
+            "Posted events are immutable: corrections are reversals, never edits or deletes."
         ),
     },
 ]
@@ -763,6 +785,203 @@ def read_technical_snapshot(
     evidence together with fundamentals, valuation, and other market evidence.
     """
     return market.technical_snapshot(ticker, as_of, benchmark, event_date, lookback_years)
+
+
+@app.post(
+    "/api/v1/portfolios/{portfolio_id}/transactions",
+    response_model=JournalEventDetail,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="record_transaction",
+    summary="Post one balanced transaction and its cash effect atomically",
+    response_description="The posted event with its legs and balance proof",
+    responses={
+        404: {"model": ErrorResponse, "description": "`portfolio_not_found`."},
+        409: {
+            "model": ErrorResponse,
+            "description": "`idempotency_conflict`: the request_id was reused with other data.",
+        },
+    },
+    tags=["journal"],
+)
+def post_transaction(
+    portfolio_id: PortfolioId,
+    data: TransactionCreate,
+    session: SessionDep,
+    market: MarketDep,
+) -> JournalEventDetail:
+    """
+    Record a completed transaction as one atomic event; this never places an order.
+
+    Unlike `record_trade`, which only moves the position, this posts the security, fee, tax, and
+    settlement-cash legs together: either every leg and both projections commit, or none does.
+    Fees and taxes on a trade capitalize into cost basis. Income is recorded gross with its
+    withholding split out, and is never treated as an investor contribution.
+    """
+    if data.ticker:
+        _resolve_or_fetch(session, market, data.ticker)
+    event = record_transaction(
+        session,
+        portfolio_id,
+        TransactionRequest(
+            request_id=data.request_id,
+            event_type=data.transaction_type,
+            ticker=data.ticker,
+            quantity=data.quantity,
+            unit_price=data.unit_price,
+            amount=data.amount,
+            fee=data.fee,
+            tax=data.tax,
+            settlement_amount=data.settlement_amount,
+            occurred_at=data.occurred_at,
+            trade_date=data.trade_date,
+            settlement_date=data.settlement_date,
+            source_reference=data.source_reference,
+            memo=data.memo,
+        ),
+    )
+    return _event_detail_response(session, portfolio_id, event.id)
+
+
+@app.post(
+    "/api/v1/portfolios/{portfolio_id}/transactions/{event_id}/reversal",
+    response_model=JournalEventDetail,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="reverse_transaction",
+    summary="Reverse a posted transaction without deleting it",
+    response_description="The reversal event with its opposing legs",
+    responses={
+        404: {"model": ErrorResponse, "description": "`journal_event_not_found`."},
+        409: {
+            "model": ErrorResponse,
+            "description": "`already_reversed` or `cannot_reverse_a_reversal`.",
+        },
+    },
+    tags=["journal"],
+)
+def post_transaction_reversal(
+    portfolio_id: PortfolioId,
+    event_id: Annotated[str, Path(description="The posted event to undo.")],
+    data: TransactionReverse,
+    session: SessionDep,
+) -> JournalEventDetail:
+    """
+    Undo a posted event by writing its mirror image, restoring the prior position and cash.
+
+    The original event is never modified or deleted; it is marked reversed and linked to the new
+    event, so both the entry and the fact that it was undone remain auditable. Correct a reversed
+    event by posting a replacement, not by reversing again.
+    """
+    reversal = reverse_transaction(
+        session, portfolio_id, event_id, request_id=data.request_id, memo=data.memo
+    )
+    return _event_detail_response(session, portfolio_id, reversal.id)
+
+
+@app.get(
+    "/api/v1/portfolios/{portfolio_id}/transactions",
+    response_model=JournalEventPage,
+    operation_id="list_journal_events",
+    summary="Page the journal with audit filters",
+    response_description="Matching events, newest first",
+    responses={404: {"model": ErrorResponse, "description": "`portfolio_not_found`."}},
+    tags=["journal"],
+)
+def read_journal_events(
+    portfolio_id: PortfolioId,
+    session: SessionDep,
+    event_type: Annotated[
+        str | None, Query(description="Filter to one transaction type.")
+    ] = None,
+    ticker: Annotated[
+        str | None, Query(description="Only events with a leg in this instrument.")
+    ] = None,
+    source_reference: Annotated[
+        str | None, Query(description="Exact broker confirmation or statement ID.")
+    ] = None,
+    start: Annotated[datetime | None, Query(description="Inclusive lower bound.")] = None,
+    end: Annotated[datetime | None, Query(description="Inclusive upper bound.")] = None,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> JournalEventPage:
+    """
+    Read the audit ledger. Reversals appear as their own events alongside what they reversed.
+    """
+    events, total = list_events(
+        session,
+        portfolio_id,
+        event_type=event_type,
+        instrument_reference=ticker,
+        source_reference=source_reference,
+        start=start,
+        end=end,
+        offset=offset,
+        limit=limit,
+    )
+    return JournalEventPage(
+        items=[JournalEventRead.model_validate(event) for event in events],
+        total=total,
+        offset=offset,
+        limit=limit,
+    )
+
+
+@app.get(
+    "/api/v1/portfolios/{portfolio_id}/transactions/{event_id}",
+    response_model=JournalEventDetail,
+    operation_id="get_journal_event",
+    summary="Read one event with its legs and balance proof",
+    response_description="Event header, legs, balance validation, and reversal chain",
+    responses={404: {"model": ErrorResponse, "description": "`journal_event_not_found`."}},
+    tags=["journal"],
+)
+def read_journal_event(
+    portfolio_id: PortfolioId,
+    event_id: Annotated[str, Path(description="The event to read.")],
+    session: SessionDep,
+) -> JournalEventDetail:
+    """
+    Inspect exactly what an event did: every leg, the residual proving it balanced, whether it
+    counts as an external flow, and its links to any reversal.
+    """
+    return _event_detail_response(session, portfolio_id, event_id)
+
+
+def _event_detail_response(
+    session: Session, portfolio_id: str, event_id: str
+) -> JournalEventDetail:
+    detail = event_detail(session, portfolio_id, event_id)
+    report = detail["balance"]
+    return JournalEventDetail(
+        event=JournalEventRead.model_validate(detail["event"]),
+        legs=[
+            JournalLegRead(
+                leg_type=leg.leg_type.value,
+                account_role=leg.account_role,
+                currency=leg.currency,
+                instrument_id=leg.instrument_id,
+                quantity_delta=leg.quantity_delta,
+                amount_delta=leg.amount_delta,
+                unit_price=leg.unit_price,
+                fx_rate=leg.fx_rate,
+                metadata=leg.metadata,
+            )
+            for leg in detail["legs"]
+        ],
+        balance=(
+            BalanceRead(
+                balanced=report.balanced,
+                residual=report.residual,
+                functional_currency=report.functional_currency,
+                leg_count=report.leg_count,
+                warnings=report.warnings,
+            )
+            if report
+            else None
+        ),
+        flow_classification=detail["flow_classification"],
+        reverses_event_id=detail["reverses_event_id"],
+        reversed_by_event_id=detail["reversed_by_event_id"],
+    )
 
 
 InstrumentRef = Annotated[

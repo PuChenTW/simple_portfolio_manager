@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from alembic.config import Config
 
 from alembic import command
-from portfolio_manager.db import create_sqlite_engine
+from portfolio_manager.db import Base, create_sqlite_engine
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -94,11 +94,39 @@ def test_upgrade_backfills_instrument_ids_for_existing_rows(database_url: str) -
     assert aliases == ["2330.TW", "AAPL"], "legacy rows must get provider alias rows"
 
 
-def test_downgrade_restores_previous_schema(database_url: str) -> None:
+def test_migrated_schema_matches_the_orm_models(database_url: str) -> None:
+    """Guards the split brain where models.py and alembic/versions drift apart.
+
+    The test harness builds tables from the ORM while production runs migrations, so a table or
+    column added to only one of them would otherwise pass every other test.
+    """
+    command.upgrade(alembic_config(database_url), "head")
+
+    engine = create_sqlite_engine(database_url)
+    try:
+        inspector = sa.inspect(engine)
+        migrated = set(inspector.get_table_names()) - {"alembic_version"}
+        declared = set(Base.metadata.tables)
+        assert migrated == declared
+
+        for table in sorted(migrated):
+            migrated_columns = {column["name"] for column in inspector.get_columns(table)}
+            declared_columns = set(Base.metadata.tables[table].columns.keys())
+            assert migrated_columns == declared_columns, f"column drift in {table}"
+    finally:
+        engine.dispose()
+
+
+def test_downgrade_unwinds_every_revision(database_url: str) -> None:
+    """Each revision must be reversible, so a bad deploy can be rolled back rather than restored."""
     config = alembic_config(database_url)
     command.upgrade(config, "head")
-    command.downgrade(config, "0001")
 
+    command.downgrade(config, "0002")
+    assert "journal_events" not in table_names(database_url)
+    assert "journal_legs" not in table_names(database_url)
+
+    command.downgrade(config, "0001")
     tables = table_names(database_url)
     assert "issuers" not in tables
     assert "instrument_aliases" not in tables

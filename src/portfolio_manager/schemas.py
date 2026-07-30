@@ -5,6 +5,7 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
+from .journal import EventType, FlowClassification
 from .market import HistoryAdjustment, HistoryInterval
 from .taxonomy import Provenance
 
@@ -577,6 +578,142 @@ class IssuerMappingUpdate(ApiModel):
         default=None,
         description="Attach to this existing issuer instead of matching or creating by name.",
     )
+
+
+class TransactionCreate(ApiModel):
+    """Record one economic event with every leg posted atomically."""
+
+    request_id: RequestId
+    transaction_type: EventType = Field(
+        description=(
+            "buy, sell, deposit, withdrawal, transfer_in, transfer_out, dividend, interest, fee, "
+            "or tax."
+        ),
+        examples=["buy"],
+    )
+    ticker: str | None = Field(
+        default=None,
+        description="Required for buy and sell; optional on dividend and interest.",
+        examples=["AAPL"],
+    )
+    quantity: Decimal | None = Field(default=None, description="Required for buy and sell.")
+    unit_price: Decimal | None = Field(
+        default=None, description="Actual execution price; required for buy and sell."
+    )
+    amount: Decimal | None = Field(
+        default=None,
+        description=(
+            "Positive magnitude for non-trade events. Direction comes from `transaction_type`, "
+            "so a withdrawal takes a positive amount. For income this is the gross figure."
+        ),
+    )
+    fee: Decimal = Field(default=Decimal("0"), ge=0, description="Capitalized into cost basis.")
+    tax: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description="Withholding on income, or a capitalized trade tax.",
+    )
+    settlement_amount: Decimal | None = Field(
+        default=None,
+        description=(
+            "Signed cash actually settled. Overrides the computed figure when a broker reports "
+            "an exact amount; the event must still balance."
+        ),
+    )
+    occurred_at: datetime | None = Field(default=None, description="Defaults to server time.")
+    trade_date: datetime | None = None
+    settlement_date: datetime | None = None
+    source_reference: str | None = Field(
+        default=None, description="Broker confirmation or statement ID, for reconciliation."
+    )
+    memo: str | None = None
+
+    @field_validator("quantity", "unit_price")
+    @classmethod
+    def validate_positive(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and value <= 0:
+            raise ValueError("must be greater than zero")
+        return value
+
+
+class TransactionReverse(ApiModel):
+    """Undo a posted event by writing its mirror image."""
+
+    request_id: RequestId
+    memo: str | None = Field(default=None, description="Why the original event was undone.")
+
+
+class JournalLegRead(ApiModel):
+    """One side of an event, in the currency named on the leg."""
+
+    leg_type: str
+    account_role: str
+    currency: str
+    instrument_id: str | None
+    quantity_delta: Decimal | None
+    amount_delta: Decimal | None
+    unit_price: Decimal | None
+    fx_rate: Decimal | None
+    metadata: str | None = None
+
+
+class BalanceRead(ApiModel):
+    """Proof that the event's legs net to zero in its functional currency."""
+
+    balanced: bool
+    residual: Decimal
+    functional_currency: str
+    leg_count: int
+    warnings: list[str] = Field(default_factory=list)
+
+
+class JournalEventRead(ApiModel):
+    """A posted event header without its legs."""
+
+    id: str
+    portfolio_id: str
+    request_id: str
+    event_type: str
+    status: str
+    functional_currency: str
+    occurred_at: datetime
+    trade_date: datetime | None
+    settlement_date: datetime | None
+    source: str
+    source_reference: str | None
+    memo: str | None
+    reverses_event_id: str | None
+    is_unlinked_legacy: bool = Field(
+        description=(
+            "True when a migrated legacy trade or cash row had no provable settlement counterpart."
+        )
+    )
+    created_at: datetime
+
+
+class JournalEventDetail(ApiModel):
+    """An event with its legs, balance validation, and reversal chain."""
+
+    event: JournalEventRead
+    legs: list[JournalLegRead]
+    balance: BalanceRead | None
+    flow_classification: FlowClassification | None = Field(
+        description=(
+            "external for investor contributions and withdrawals; internal for trades, income, "
+            "fees, and corporate actions. Performance measurement neutralizes external flows."
+        )
+    )
+    reverses_event_id: str | None
+    reversed_by_event_id: str | None
+
+
+class JournalEventPage(ApiModel):
+    """A page of journal events, newest first."""
+
+    items: list[JournalEventRead]
+    total: int
+    offset: int
+    limit: int
 
 
 class ErrorResponse(ApiModel):

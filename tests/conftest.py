@@ -184,5 +184,6 @@ def harness(tmp_path) -> Generator[Harness]:
     with TestClient(app) as client:
         yield Harness(client=client, provider=provider, session_factory=factory)
     app.dependency_overrides.clear()
-    Base.metadata.drop_all(engine)
+    # No drop_all: each test gets its own tmp_path database, and journal_events references itself
+    # (reverses_event_id), which SQLite cannot resolve into a safe drop order.
     engine.dispose()

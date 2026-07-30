@@ -325,6 +325,132 @@ async def get_technical_snapshot(
     )
 
 
+# --- Journal ----------------------------------------------------------------
+
+
+@mcp.tool()
+async def record_transaction(
+    portfolio_id: str,
+    request_id: str,
+    transaction_type: str,
+    ticker: str | None = None,
+    quantity: str | None = None,
+    unit_price: str | None = None,
+    amount: str | None = None,
+    fee: str = "0",
+    tax: str = "0",
+    settlement_amount: str | None = None,
+    occurred_at: str | None = None,
+    trade_date: str | None = None,
+    settlement_date: str | None = None,
+    source_reference: str | None = None,
+    memo: str | None = None,
+) -> dict[str, Any]:
+    """Record a completed transaction and its cash effect as one atomic event.
+
+    Prefer this over `record_trade` plus `record_cash_transaction`: those are two independent
+    writes that can leave a position updated with cash untouched, while this posts every leg
+    together or not at all. This never places an order.
+
+    `transaction_type` is buy, sell, deposit, withdrawal, transfer_in, transfer_out, dividend,
+    interest, fee, or tax. Buys and sells need `ticker`, `quantity`, and the actual execution
+    `unit_price`; other types need `amount`. Send `amount` as a positive magnitude -- direction
+    comes from the type, so a withdrawal takes a positive number. For dividends and interest,
+    `amount` is the gross figure and `tax` is the withholding, so the net cash is derived and the
+    tax stays on record. Trade `fee` and `tax` capitalize into cost basis. Pass all decimals as
+    strings. `request_id` is an idempotency key: reuse it only to retry the identical transaction.
+    """
+    payload: dict[str, Any] = {
+        "request_id": request_id,
+        "transaction_type": transaction_type,
+        "fee": fee,
+        "tax": tax,
+    }
+    for key, value in (
+        ("ticker", ticker),
+        ("quantity", quantity),
+        ("unit_price", unit_price),
+        ("amount", amount),
+        ("settlement_amount", settlement_amount),
+        ("occurred_at", occurred_at),
+        ("trade_date", trade_date),
+        ("settlement_date", settlement_date),
+        ("source_reference", source_reference),
+        ("memo", memo),
+    ):
+        if value is not None:
+            payload[key] = value
+    return await _request(
+        "POST", f"/api/v1/portfolios/{portfolio_id}/transactions", json=payload
+    )
+
+
+@mcp.tool()
+async def reverse_transaction(
+    portfolio_id: str, event_id: str, request_id: str, memo: str | None = None
+) -> dict[str, Any]:
+    """Undo a posted transaction by writing its mirror image; nothing is deleted.
+
+    Position and cash return to their pre-transaction state. The original event stays in the
+    ledger marked reversed and linked to this new event, so the entry and its undo are both
+    auditable. An event can only be reversed once; correct a reversed event by posting a
+    replacement transaction rather than reversing again.
+    """
+    payload: dict[str, Any] = {"request_id": request_id}
+    if memo is not None:
+        payload["memo"] = memo
+    return await _request(
+        "POST",
+        f"/api/v1/portfolios/{portfolio_id}/transactions/{event_id}/reversal",
+        json=payload,
+    )
+
+
+@mcp.tool()
+async def get_journal_event(portfolio_id: str, event_id: str) -> dict[str, Any]:
+    """Inspect exactly what one transaction did, leg by leg.
+
+    Returns every leg, a `balance` block whose zero residual proves the event was consistent, the
+    `flow_classification` (external investor money versus internal returns such as dividends), and
+    links to any reversal. Use this to explain a cash or position change rather than inferring it.
+    """
+    return await _request(
+        "GET", f"/api/v1/portfolios/{portfolio_id}/transactions/{event_id}"
+    )
+
+
+@mcp.tool()
+async def list_journal_events(
+    portfolio_id: str,
+    event_type: str | None = None,
+    ticker: str | None = None,
+    source_reference: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    offset: int = 0,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Page the audit ledger, newest first, filtered by type, instrument, date, or broker ID.
+
+    Reversals appear as their own events next to what they reversed, so the history shows what was
+    undone instead of hiding it. `start` and `end` are RFC 3339 and inclusive. `source_reference`
+    matches exactly and is the fastest way to reconcile against a broker statement.
+    """
+    params: dict[str, Any] = {"offset": offset, "limit": limit}
+    for key, value in (
+        ("event_type", event_type),
+        ("ticker", ticker),
+        ("source_reference", source_reference),
+        ("start", start),
+        ("end", end),
+    ):
+        if value is not None:
+            params[key] = value
+    return await _request(
+        "GET", f"/api/v1/portfolios/{portfolio_id}/transactions", params=params
+    )
+
+
 # --- Instruments ------------------------------------------------------------
 
 

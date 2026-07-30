@@ -216,6 +216,62 @@ class CashTransaction(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class JournalEvent(Base):
+    """One economic event. Immutable once posted: corrections are reversal + replacement."""
+
+    __tablename__ = "journal_events"
+    __table_args__ = (
+        UniqueConstraint("portfolio_id", "request_id", name="uq_journal_request"),
+        Index("ix_journal_events_portfolio_occurred", "portfolio_id", "occurred_at"),
+        Index("ix_journal_events_type", "portfolio_id", "event_type"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    portfolio_id: Mapped[str] = mapped_column(
+        ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False
+    )
+    request_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    status: Mapped[str] = mapped_column(String(10), nullable=False)
+    functional_currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    trade_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    settlement_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source: Mapped[str] = mapped_column(String(50), nullable=False)
+    source_reference: Mapped[str | None] = mapped_column(String(200))
+    memo: Mapped[str | None] = mapped_column(Text())
+    reverses_event_id: Mapped[str | None] = mapped_column(
+        ForeignKey("journal_events.id", ondelete="RESTRICT")
+    )
+    # Set when a legacy trade or cash row was migrated without a provable counterpart leg.
+    is_unlinked_legacy: Mapped[bool] = mapped_column(Boolean(), nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class JournalLeg(Base):
+    """One side of an event. Legs balance in the event's functional currency or nothing posts."""
+
+    __tablename__ = "journal_legs"
+    __table_args__ = (Index("ix_journal_legs_event", "event_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    event_id: Mapped[str] = mapped_column(
+        ForeignKey("journal_events.id", ondelete="CASCADE"), nullable=False
+    )
+    leg_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    instrument_id: Mapped[str | None] = mapped_column(
+        ForeignKey("instruments.instrument_id", ondelete="RESTRICT")
+    )
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    quantity_delta: Mapped[Decimal | None] = mapped_column(DecimalText())
+    amount_delta: Mapped[Decimal | None] = mapped_column(DecimalText())
+    unit_price: Mapped[Decimal | None] = mapped_column(DecimalText())
+    fx_rate: Mapped[Decimal | None] = mapped_column(DecimalText())
+    account_role: Mapped[str] = mapped_column(String(30), nullable=False)
+    leg_metadata: Mapped[str | None] = mapped_column(Text())
+
+
 class QuoteCache(Base):
     __tablename__ = "quote_cache"
 
