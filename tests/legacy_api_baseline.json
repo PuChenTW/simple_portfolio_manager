@@ -1,0 +1,3084 @@
+{
+ "models": {
+  "CashAction": {
+   "description": "Whether an independent cash ledger event adds or removes cash.",
+   "enum": [
+    "deposit",
+    "withdraw"
+   ],
+   "title": "CashAction",
+   "type": "string"
+  },
+  "CashPositionRead": {
+   "description": "Current cash balance and its share of total portfolio value.",
+   "properties": {
+    "amount": {
+     "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+     "title": "Amount",
+     "type": "string"
+    },
+    "currency": {
+     "title": "Currency",
+     "type": "string"
+    },
+    "updated_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Updated At"
+    },
+    "weight_percent": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Weight Percent"
+    }
+   },
+   "required": [
+    "currency",
+    "amount",
+    "weight_percent",
+    "updated_at"
+   ],
+   "title": "CashPositionRead",
+   "type": "object"
+  },
+  "CashTransactionCreate": {
+   "description": "Record cash independently from asset trades.",
+   "examples": [
+    {
+     "action": "deposit",
+     "amount": "10000",
+     "request_id": "cash-20260722-001"
+    }
+   ],
+   "properties": {
+    "action": {
+     "$ref": "#/components/schemas/CashAction",
+     "description": "Deposit adds cash; withdraw removes available cash."
+    },
+    "amount": {
+     "anyOf": [
+      {
+       "exclusiveMinimum": 0.0,
+       "type": "number"
+      },
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      }
+     ],
+     "description": "Cash amount in the portfolio base currency.",
+     "examples": [
+      "10.5"
+     ],
+     "title": "Amount"
+    },
+    "occurred_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "Event time as RFC 3339. Omit to use the current UTC server time.",
+     "examples": [
+      "2026-07-22T13:00:00Z"
+     ],
+     "title": "Occurred At"
+    },
+    "request_id": {
+     "description": "Client-generated idempotency key for one logical mutation. Reuse it only when retrying the exact same request.",
+     "examples": [
+      "trade-20260722-001"
+     ],
+     "maxLength": 100,
+     "minLength": 1,
+     "title": "Request Id",
+     "type": "string"
+    }
+   },
+   "required": [
+    "request_id",
+    "action",
+    "amount"
+   ],
+   "title": "CashTransactionCreate",
+   "type": "object"
+  },
+  "CashTransactionPage": {
+   "description": "A reverse-chronological page of cash ledger entries.",
+   "properties": {
+    "items": {
+     "items": {
+      "$ref": "#/components/schemas/CashTransactionRead"
+     },
+     "title": "Items",
+     "type": "array"
+    },
+    "limit": {
+     "title": "Limit",
+     "type": "integer"
+    },
+    "offset": {
+     "title": "Offset",
+     "type": "integer"
+    },
+    "total": {
+     "title": "Total",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "items",
+    "offset",
+    "limit",
+    "total"
+   ],
+   "title": "CashTransactionPage",
+   "type": "object"
+  },
+  "CashTransactionRead": {
+   "description": "An immutable cash ledger entry.",
+   "properties": {
+    "action": {
+     "$ref": "#/components/schemas/CashAction"
+    },
+    "amount": {
+     "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+     "title": "Amount",
+     "type": "string"
+    },
+    "created_at": {
+     "format": "date-time",
+     "title": "Created At",
+     "type": "string"
+    },
+    "id": {
+     "title": "Id",
+     "type": "string"
+    },
+    "occurred_at": {
+     "format": "date-time",
+     "title": "Occurred At",
+     "type": "string"
+    },
+    "portfolio_id": {
+     "title": "Portfolio Id",
+     "type": "string"
+    },
+    "request_id": {
+     "title": "Request Id",
+     "type": "string"
+    }
+   },
+   "required": [
+    "id",
+    "portfolio_id",
+    "request_id",
+    "action",
+    "amount",
+    "occurred_at",
+    "created_at"
+   ],
+   "title": "CashTransactionRead",
+   "type": "object"
+  },
+  "ErrorResponse": {
+   "description": "Stable machine-readable error envelope used for validation and domain failures.",
+   "properties": {
+    "code": {
+     "title": "Code",
+     "type": "string"
+    },
+    "details": {
+     "additionalProperties": true,
+     "title": "Details",
+     "type": "object"
+    },
+    "message": {
+     "title": "Message",
+     "type": "string"
+    }
+   },
+   "required": [
+    "code",
+    "message",
+    "details"
+   ],
+   "title": "ErrorResponse",
+   "type": "object"
+  },
+  "EventAnalysisRead": {
+   "description": "Event bar and daily-OHLCV-derived anchored VWAP approximation.",
+   "properties": {
+    "anchored_vwap": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "Approximation from daily typical price (high + low + close) / 3, weighted by daily volume from the effective anchor through as_of.",
+     "title": "Anchored Vwap"
+    },
+    "close": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Close"
+    },
+    "effective_anchor_date": {
+     "anyOf": [
+      {
+       "format": "date",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Effective Anchor Date"
+    },
+    "gap_percent": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Gap Percent"
+    },
+    "high": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "High"
+    },
+    "low": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Low"
+    },
+    "requested_event_date": {
+     "format": "date",
+     "title": "Requested Event Date",
+     "type": "string"
+    },
+    "volume_percentile": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Volume Percentile"
+    }
+   },
+   "required": [
+    "requested_event_date",
+    "effective_anchor_date",
+    "gap_percent",
+    "high",
+    "low",
+    "close",
+    "volume_percentile",
+    "anchored_vwap"
+   ],
+   "title": "EventAnalysisRead",
+   "type": "object"
+  },
+  "HealthRead": {
+   "description": "API and database liveness status.",
+   "properties": {
+    "database": {
+     "title": "Database",
+     "type": "string"
+    },
+    "status": {
+     "title": "Status",
+     "type": "string"
+    },
+    "timestamp": {
+     "format": "date-time",
+     "title": "Timestamp",
+     "type": "string"
+    }
+   },
+   "required": [
+    "status",
+    "database",
+    "timestamp"
+   ],
+   "title": "HealthRead",
+   "type": "object"
+  },
+  "HistoryAdjustment": {
+   "enum": [
+    "yfinance_auto_adjust",
+    "unadjusted"
+   ],
+   "title": "HistoryAdjustment",
+   "type": "string"
+  },
+  "HistoryBarRead": {
+   "description": "One adjusted daily OHLCV bar.",
+   "properties": {
+    "close": {
+     "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+     "title": "Close",
+     "type": "string"
+    },
+    "high": {
+     "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+     "title": "High",
+     "type": "string"
+    },
+    "low": {
+     "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+     "title": "Low",
+     "type": "string"
+    },
+    "open": {
+     "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+     "title": "Open",
+     "type": "string"
+    },
+    "timestamp": {
+     "format": "date-time",
+     "title": "Timestamp",
+     "type": "string"
+    },
+    "volume": {
+     "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+     "title": "Volume",
+     "type": "string"
+    }
+   },
+   "required": [
+    "timestamp",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+   ],
+   "title": "HistoryBarRead",
+   "type": "object"
+  },
+  "HistoryInterval": {
+   "enum": [
+    "1d",
+    "1wk",
+    "1mo"
+   ],
+   "title": "HistoryInterval",
+   "type": "string"
+  },
+  "HistoryRead": {
+   "description": "OHLCV history with explicit request, observation, and adjustment provenance.",
+   "properties": {
+    "actual_first_observation": {
+     "anyOf": [
+      {
+       "format": "date",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Actual First Observation"
+    },
+    "actual_last_observation": {
+     "anyOf": [
+      {
+       "format": "date",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Actual Last Observation"
+    },
+    "adjusted": {
+     "description": "Compatibility flag; prefer the precise adjustment field.",
+     "title": "Adjusted",
+     "type": "boolean"
+    },
+    "adjustment": {
+     "$ref": "#/components/schemas/HistoryAdjustment"
+    },
+    "bars": {
+     "items": {
+      "$ref": "#/components/schemas/HistoryBarRead"
+     },
+     "title": "Bars",
+     "type": "array"
+    },
+    "fetched_at": {
+     "format": "date-time",
+     "title": "Fetched At",
+     "type": "string"
+    },
+    "interval": {
+     "$ref": "#/components/schemas/HistoryInterval"
+    },
+    "provider": {
+     "title": "Provider",
+     "type": "string"
+    },
+    "requested_end_date": {
+     "anyOf": [
+      {
+       "format": "date",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Requested End Date"
+    },
+    "requested_start_date": {
+     "anyOf": [
+      {
+       "format": "date",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Requested Start Date"
+    },
+    "ticker": {
+     "title": "Ticker",
+     "type": "string"
+    },
+    "warnings": {
+     "items": {
+      "type": "string"
+     },
+     "title": "Warnings",
+     "type": "array"
+    }
+   },
+   "required": [
+    "ticker",
+    "provider",
+    "interval",
+    "adjustment",
+    "adjusted",
+    "requested_start_date",
+    "requested_end_date",
+    "actual_first_observation",
+    "actual_last_observation",
+    "fetched_at",
+    "bars"
+   ],
+   "title": "HistoryRead",
+   "type": "object"
+  },
+  "IndicatorsRead": {
+   "description": "Fixed indicators calculated from adjusted daily closing prices.",
+   "properties": {
+    "calculated_as_of": {
+     "format": "date-time",
+     "title": "Calculated As Of",
+     "type": "string"
+    },
+    "macd": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Macd"
+    },
+    "macd_histogram": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Macd Histogram"
+    },
+    "macd_signal": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Macd Signal"
+    },
+    "rsi14": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Rsi14"
+    },
+    "sma20": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Sma20"
+    },
+    "sma50": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Sma50"
+    }
+   },
+   "required": [
+    "sma20",
+    "sma50",
+    "rsi14",
+    "macd",
+    "macd_signal",
+    "macd_histogram",
+    "calculated_as_of"
+   ],
+   "title": "IndicatorsRead",
+   "type": "object"
+  },
+  "MarketInstrumentRead": {
+   "description": "Resolved instrument metadata, quote, indicators, and data-quality warnings.",
+   "properties": {
+    "asset_type": {
+     "title": "Asset Type",
+     "type": "string"
+    },
+    "currency": {
+     "title": "Currency",
+     "type": "string"
+    },
+    "exchange": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Exchange"
+    },
+    "indicators": {
+     "$ref": "#/components/schemas/IndicatorsRead"
+    },
+    "market": {
+     "title": "Market",
+     "type": "string"
+    },
+    "name": {
+     "title": "Name",
+     "type": "string"
+    },
+    "quote": {
+     "$ref": "#/components/schemas/QuoteRead"
+    },
+    "ticker": {
+     "title": "Ticker",
+     "type": "string"
+    },
+    "warnings": {
+     "items": {
+      "type": "string"
+     },
+     "title": "Warnings",
+     "type": "array"
+    }
+   },
+   "required": [
+    "ticker",
+    "name",
+    "asset_type",
+    "market",
+    "exchange",
+    "currency",
+    "quote",
+    "indicators"
+   ],
+   "title": "MarketInstrumentRead",
+   "type": "object"
+  },
+  "MomentumRead": {
+   "properties": {
+    "macd": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Macd"
+    },
+    "macd_histogram": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Macd Histogram"
+    },
+    "macd_signal": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Macd Signal"
+    },
+    "return_120d_percent": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Return 120D Percent"
+    },
+    "return_20d_percent": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Return 20D Percent"
+    },
+    "return_252d_percent": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Return 252D Percent"
+    },
+    "return_60d_percent": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Return 60D Percent"
+    },
+    "rsi14": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Rsi14"
+    }
+   },
+   "required": [
+    "return_20d_percent",
+    "return_60d_percent",
+    "return_120d_percent",
+    "return_252d_percent",
+    "rsi14",
+    "macd",
+    "macd_signal",
+    "macd_histogram"
+   ],
+   "title": "MomentumRead",
+   "type": "object"
+  },
+  "PortfolioCreate": {
+   "description": "Create an isolated, single-currency portfolio.",
+   "examples": [
+    {
+     "base_currency": "USD",
+     "name": "US long term"
+    }
+   ],
+   "properties": {
+    "base_currency": {
+     "description": "Three-letter ISO currency. Every instrument added later must quote in this currency.",
+     "examples": [
+      "USD"
+     ],
+     "title": "Base Currency",
+     "type": "string"
+    },
+    "name": {
+     "description": "Unique human-readable portfolio name.",
+     "examples": [
+      "US long term"
+     ],
+     "maxLength": 100,
+     "minLength": 1,
+     "title": "Name",
+     "type": "string"
+    }
+   },
+   "required": [
+    "name",
+    "base_currency"
+   ],
+   "title": "PortfolioCreate",
+   "type": "object"
+  },
+  "PortfolioRead": {
+   "description": "Persistent portfolio identity and its currency invariant.",
+   "properties": {
+    "base_currency": {
+     "title": "Base Currency",
+     "type": "string"
+    },
+    "created_at": {
+     "format": "date-time",
+     "title": "Created At",
+     "type": "string"
+    },
+    "id": {
+     "title": "Id",
+     "type": "string"
+    },
+    "name": {
+     "title": "Name",
+     "type": "string"
+    }
+   },
+   "required": [
+    "id",
+    "name",
+    "base_currency",
+    "created_at"
+   ],
+   "title": "PortfolioRead",
+   "type": "object"
+  },
+  "PortfolioSummary": {
+   "description": "Complete single-currency portfolio valuation, allocation, and P&L.",
+   "properties": {
+    "cash": {
+     "$ref": "#/components/schemas/CashPositionRead"
+    },
+    "cash_value": {
+     "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+     "title": "Cash Value",
+     "type": "string"
+    },
+    "portfolio": {
+     "$ref": "#/components/schemas/PortfolioRead"
+    },
+    "positions": {
+     "items": {
+      "$ref": "#/components/schemas/PositionRead"
+     },
+     "title": "Positions",
+     "type": "array"
+    },
+    "realized_pnl": {
+     "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+     "title": "Realized Pnl",
+     "type": "string"
+    },
+    "securities_value": {
+     "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+     "title": "Securities Value",
+     "type": "string"
+    },
+    "total_pnl": {
+     "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+     "title": "Total Pnl",
+     "type": "string"
+    },
+    "total_value": {
+     "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+     "title": "Total Value",
+     "type": "string"
+    },
+    "unrealized_pnl": {
+     "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+     "title": "Unrealized Pnl",
+     "type": "string"
+    },
+    "valuation_as_of": {
+     "format": "date-time",
+     "title": "Valuation As Of",
+     "type": "string"
+    },
+    "warnings": {
+     "items": {
+      "type": "string"
+     },
+     "title": "Warnings",
+     "type": "array"
+    }
+   },
+   "required": [
+    "portfolio",
+    "positions",
+    "cash",
+    "securities_value",
+    "cash_value",
+    "total_value",
+    "realized_pnl",
+    "unrealized_pnl",
+    "total_pnl",
+    "valuation_as_of"
+   ],
+   "title": "PortfolioSummary",
+   "type": "object"
+  },
+  "PositionList": {
+   "description": "Open positions, optionally filtered by portfolio-local tags.",
+   "properties": {
+    "items": {
+     "items": {
+      "$ref": "#/components/schemas/PositionRead"
+     },
+     "title": "Items",
+     "type": "array"
+    },
+    "warnings": {
+     "items": {
+      "type": "string"
+     },
+     "title": "Warnings",
+     "type": "array"
+    }
+   },
+   "required": [
+    "items"
+   ],
+   "title": "PositionList",
+   "type": "object"
+  },
+  "PositionRead": {
+   "description": "An open position valued using the latest available quote.",
+   "properties": {
+    "asset_type": {
+     "title": "Asset Type",
+     "type": "string"
+    },
+    "average_cost": {
+     "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+     "title": "Average Cost",
+     "type": "string"
+    },
+    "currency": {
+     "title": "Currency",
+     "type": "string"
+    },
+    "current_price": {
+     "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+     "title": "Current Price",
+     "type": "string"
+    },
+    "market": {
+     "title": "Market",
+     "type": "string"
+    },
+    "market_value": {
+     "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+     "title": "Market Value",
+     "type": "string"
+    },
+    "name": {
+     "title": "Name",
+     "type": "string"
+    },
+    "price_as_of": {
+     "format": "date-time",
+     "title": "Price As Of",
+     "type": "string"
+    },
+    "price_fetched_at": {
+     "format": "date-time",
+     "title": "Price Fetched At",
+     "type": "string"
+    },
+    "price_stale": {
+     "description": "Whether valuation used an expired cached quote.",
+     "title": "Price Stale",
+     "type": "boolean"
+    },
+    "quantity": {
+     "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+     "title": "Quantity",
+     "type": "string"
+    },
+    "realized_pnl": {
+     "description": "Cumulative P&L already realized by sells, after fees.",
+     "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+     "title": "Realized Pnl",
+     "type": "string"
+    },
+    "tags": {
+     "items": {
+      "type": "string"
+     },
+     "title": "Tags",
+     "type": "array"
+    },
+    "ticker": {
+     "title": "Ticker",
+     "type": "string"
+    },
+    "total_pnl": {
+     "description": "realized_pnl + unrealized_pnl.",
+     "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+     "title": "Total Pnl",
+     "type": "string"
+    },
+    "unrealized_pnl": {
+     "description": "(current_price - average_cost) \u00d7 open quantity.",
+     "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+     "title": "Unrealized Pnl",
+     "type": "string"
+    },
+    "unrealized_pnl_percent": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Unrealized Pnl Percent"
+    },
+    "weight_percent": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "Position market value as a percentage of securities plus cash.",
+     "title": "Weight Percent"
+    }
+   },
+   "required": [
+    "ticker",
+    "name",
+    "asset_type",
+    "market",
+    "currency",
+    "quantity",
+    "average_cost",
+    "current_price",
+    "market_value",
+    "realized_pnl",
+    "unrealized_pnl",
+    "total_pnl",
+    "unrealized_pnl_percent",
+    "weight_percent",
+    "tags",
+    "price_as_of",
+    "price_fetched_at",
+    "price_stale"
+   ],
+   "title": "PositionRead",
+   "type": "object"
+  },
+  "QuoteRead": {
+   "description": "Current quote plus explicit data provenance and freshness.",
+   "properties": {
+    "change": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Change"
+    },
+    "change_percent": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Change Percent"
+    },
+    "fetched_at": {
+     "description": "UTC time when this server fetched and cached the quote.",
+     "format": "date-time",
+     "title": "Fetched At",
+     "type": "string"
+    },
+    "high": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "High"
+    },
+    "low": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Low"
+    },
+    "market_cap": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Market Cap"
+    },
+    "open": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Open"
+    },
+    "previous_close": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Previous Close"
+    },
+    "price": {
+     "description": "Latest known market price in the instrument currency.",
+     "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+     "title": "Price",
+     "type": "string"
+    },
+    "provider_as_of": {
+     "description": "Timestamp assigned by the market data provider.",
+     "format": "date-time",
+     "title": "Provider As Of",
+     "type": "string"
+    },
+    "stale": {
+     "description": "True when refresh failed and an expired cached quote was returned. Inspect warnings.",
+     "title": "Stale",
+     "type": "boolean"
+    },
+    "volume": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Volume"
+    },
+    "year_high": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Year High"
+    },
+    "year_low": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Year Low"
+    }
+   },
+   "required": [
+    "price",
+    "open",
+    "high",
+    "low",
+    "previous_close",
+    "volume",
+    "change",
+    "change_percent",
+    "market_cap",
+    "year_high",
+    "year_low",
+    "provider_as_of",
+    "fetched_at",
+    "stale"
+   ],
+   "title": "QuoteRead",
+   "type": "object"
+  },
+  "RelativeStrengthRead": {
+   "properties": {
+    "benchmark": {
+     "title": "Benchmark",
+     "type": "string"
+    },
+    "common_observation_count": {
+     "title": "Common Observation Count",
+     "type": "integer"
+    },
+    "return_120d_percent": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Return 120D Percent"
+    },
+    "return_20d_percent": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Return 20D Percent"
+    },
+    "return_252d_percent": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Return 252D Percent"
+    },
+    "return_60d_percent": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Return 60D Percent"
+    }
+   },
+   "required": [
+    "benchmark",
+    "common_observation_count",
+    "return_20d_percent",
+    "return_60d_percent",
+    "return_120d_percent",
+    "return_252d_percent"
+   ],
+   "title": "RelativeStrengthRead",
+   "type": "object"
+  },
+  "TagMode": {
+   "description": "How multiple tag filters are combined.",
+   "enum": [
+    "any",
+    "all"
+   ],
+   "title": "TagMode",
+   "type": "string"
+  },
+  "TagsRead": {
+   "description": "Canonical tags attached to a portfolio-specific position.",
+   "properties": {
+    "portfolio_id": {
+     "title": "Portfolio Id",
+     "type": "string"
+    },
+    "tags": {
+     "items": {
+      "type": "string"
+     },
+     "title": "Tags",
+     "type": "array"
+    },
+    "ticker": {
+     "title": "Ticker",
+     "type": "string"
+    }
+   },
+   "required": [
+    "portfolio_id",
+    "ticker",
+    "tags"
+   ],
+   "title": "TagsRead",
+   "type": "object"
+  },
+  "TagsUpdate": {
+   "description": "The complete desired tag set for one open position.",
+   "examples": [
+    {
+     "tags": [
+      "core",
+      "ai"
+     ]
+    }
+   ],
+   "properties": {
+    "tags": {
+     "description": "Replacement tag set. Tags are Unicode-normalized, case-folded, deduplicated, and limited to 50 characters each. Send [] to remove all tags.",
+     "examples": [
+      [
+       "core",
+       "ai",
+       "\u9577\u671f"
+      ]
+     ],
+     "items": {
+      "type": "string"
+     },
+     "maxItems": 50,
+     "title": "Tags",
+     "type": "array"
+    }
+   },
+   "required": [
+    "tags"
+   ],
+   "title": "TagsUpdate",
+   "type": "object"
+  },
+  "TechnicalSnapshotRead": {
+   "description": "Reproducible technical market snapshot capped at the actual as-of observation.",
+   "properties": {
+    "actual_end_date": {
+     "format": "date",
+     "title": "Actual End Date",
+     "type": "string"
+    },
+    "actual_start_date": {
+     "format": "date",
+     "title": "Actual Start Date",
+     "type": "string"
+    },
+    "adjustment": {
+     "$ref": "#/components/schemas/HistoryAdjustment"
+    },
+    "as_of": {
+     "format": "date",
+     "title": "As Of",
+     "type": "string"
+    },
+    "bar_count": {
+     "title": "Bar Count",
+     "type": "integer"
+    },
+    "event_analysis": {
+     "anyOf": [
+      {
+       "$ref": "#/components/schemas/EventAnalysisRead"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "interval": {
+     "$ref": "#/components/schemas/HistoryInterval"
+    },
+    "momentum": {
+     "$ref": "#/components/schemas/MomentumRead"
+    },
+    "provider": {
+     "title": "Provider",
+     "type": "string"
+    },
+    "relative_strength": {
+     "anyOf": [
+      {
+       "$ref": "#/components/schemas/RelativeStrengthRead"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "ticker": {
+     "title": "Ticker",
+     "type": "string"
+    },
+    "trend": {
+     "$ref": "#/components/schemas/TrendRead"
+    },
+    "volatility": {
+     "$ref": "#/components/schemas/VolatilityRead"
+    },
+    "volume": {
+     "$ref": "#/components/schemas/VolumeAnalysisRead"
+    },
+    "warnings": {
+     "items": {
+      "type": "string"
+     },
+     "title": "Warnings",
+     "type": "array"
+    }
+   },
+   "required": [
+    "ticker",
+    "provider",
+    "as_of",
+    "interval",
+    "adjustment",
+    "actual_start_date",
+    "actual_end_date",
+    "bar_count",
+    "trend",
+    "momentum",
+    "volatility",
+    "volume",
+    "relative_strength",
+    "event_analysis"
+   ],
+   "title": "TechnicalSnapshotRead",
+   "type": "object"
+  },
+  "TradeCreate": {
+   "description": "Record an executed spot trade; this API does not place orders.",
+   "examples": [
+    {
+     "executed_at": "2026-07-22T13:00:00Z",
+     "fee": "1.25",
+     "quantity": "10",
+     "request_id": "trade-20260722-001",
+     "side": "buy",
+     "ticker": "AAPL",
+     "unit_price": "200.50"
+    }
+   ],
+   "properties": {
+    "executed_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "Execution time as RFC 3339. Omit to use the current UTC server time.",
+     "examples": [
+      "2026-07-22T13:00:00Z"
+     ],
+     "title": "Executed At"
+    },
+    "fee": {
+     "anyOf": [
+      {
+       "minimum": 0.0,
+       "type": "number"
+      },
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      }
+     ],
+     "default": "0",
+     "description": "Transaction fee in portfolio currency. Buy fees increase average cost; sell fees reduce realized P&L.",
+     "examples": [
+      "1.25"
+     ],
+     "title": "Fee"
+    },
+    "quantity": {
+     "anyOf": [
+      {
+       "exclusiveMinimum": 0.0,
+       "type": "number"
+      },
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      }
+     ],
+     "description": "Executed asset quantity; fractional values work.",
+     "examples": [
+      "10.5"
+     ],
+     "title": "Quantity"
+    },
+    "request_id": {
+     "description": "Client-generated idempotency key for one logical mutation. Reuse it only when retrying the exact same request.",
+     "examples": [
+      "trade-20260722-001"
+     ],
+     "maxLength": 100,
+     "minLength": 1,
+     "title": "Request Id",
+     "type": "string"
+    },
+    "side": {
+     "$ref": "#/components/schemas/TradeSide",
+     "description": "Use buy to add quantity or sell to reduce an existing position."
+    },
+    "ticker": {
+     "description": "Yahoo-compatible ticker: AAPL, 2330.TW, 8069.TWO, or BTC-USD. It is normalized to uppercase.",
+     "examples": [
+      "AAPL"
+     ],
+     "maxLength": 32,
+     "minLength": 1,
+     "title": "Ticker",
+     "type": "string"
+    },
+    "unit_price": {
+     "anyOf": [
+      {
+       "exclusiveMinimum": 0.0,
+       "type": "number"
+      },
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      }
+     ],
+     "description": "Actual execution price per unit in the instrument quote currency.",
+     "examples": [
+      "10.5"
+     ],
+     "title": "Unit Price"
+    }
+   },
+   "required": [
+    "request_id",
+    "ticker",
+    "side",
+    "quantity",
+    "unit_price"
+   ],
+   "title": "TradeCreate",
+   "type": "object"
+  },
+  "TradePage": {
+   "description": "A reverse-chronological page of trade ledger entries.",
+   "properties": {
+    "items": {
+     "items": {
+      "$ref": "#/components/schemas/TradeRead"
+     },
+     "title": "Items",
+     "type": "array"
+    },
+    "limit": {
+     "title": "Limit",
+     "type": "integer"
+    },
+    "offset": {
+     "title": "Offset",
+     "type": "integer"
+    },
+    "total": {
+     "title": "Total",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "items",
+    "offset",
+    "limit",
+    "total"
+   ],
+   "title": "TradePage",
+   "type": "object"
+  },
+  "TradeRead": {
+   "description": "An immutable trade ledger entry.",
+   "properties": {
+    "created_at": {
+     "format": "date-time",
+     "title": "Created At",
+     "type": "string"
+    },
+    "executed_at": {
+     "format": "date-time",
+     "title": "Executed At",
+     "type": "string"
+    },
+    "fee": {
+     "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+     "title": "Fee",
+     "type": "string"
+    },
+    "id": {
+     "title": "Id",
+     "type": "string"
+    },
+    "portfolio_id": {
+     "title": "Portfolio Id",
+     "type": "string"
+    },
+    "quantity": {
+     "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+     "title": "Quantity",
+     "type": "string"
+    },
+    "request_id": {
+     "title": "Request Id",
+     "type": "string"
+    },
+    "side": {
+     "$ref": "#/components/schemas/TradeSide"
+    },
+    "ticker": {
+     "title": "Ticker",
+     "type": "string"
+    },
+    "unit_price": {
+     "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+     "title": "Unit Price",
+     "type": "string"
+    }
+   },
+   "required": [
+    "id",
+    "portfolio_id",
+    "request_id",
+    "ticker",
+    "side",
+    "quantity",
+    "unit_price",
+    "fee",
+    "executed_at",
+    "created_at"
+   ],
+   "title": "TradeRead",
+   "type": "object"
+  },
+  "TradeSide": {
+   "description": "Whether a spot trade adds to or reduces a position.",
+   "enum": [
+    "buy",
+    "sell"
+   ],
+   "title": "TradeSide",
+   "type": "string"
+  },
+  "TrendRead": {
+   "properties": {
+    "price_vs_sma200_percent": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Price Vs Sma200 Percent"
+    },
+    "price_vs_sma20_percent": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Price Vs Sma20 Percent"
+    },
+    "price_vs_sma50_percent": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Price Vs Sma50 Percent"
+    },
+    "sma20": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Sma20"
+    },
+    "sma200": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Sma200"
+    },
+    "sma200_change_20d_percent": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Sma200 Change 20D Percent"
+    },
+    "sma50": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Sma50"
+    },
+    "sma50_change_20d_percent": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Sma50 Change 20D Percent"
+    }
+   },
+   "required": [
+    "sma20",
+    "sma50",
+    "sma200",
+    "sma50_change_20d_percent",
+    "sma200_change_20d_percent",
+    "price_vs_sma20_percent",
+    "price_vs_sma50_percent",
+    "price_vs_sma200_percent"
+   ],
+   "title": "TrendRead",
+   "type": "object"
+  },
+  "VolatilityRead": {
+   "properties": {
+    "atr14": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Atr14"
+    },
+    "atr14_percent": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Atr14 Percent"
+    },
+    "drawdown_from_252d_high_percent": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Drawdown From 252D High Percent"
+    },
+    "realized_volatility_20d_percent": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Realized Volatility 20D Percent"
+    },
+    "realized_volatility_60d_percent": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Realized Volatility 60D Percent"
+    }
+   },
+   "required": [
+    "atr14",
+    "atr14_percent",
+    "realized_volatility_20d_percent",
+    "realized_volatility_60d_percent",
+    "drawdown_from_252d_high_percent"
+   ],
+   "title": "VolatilityRead",
+   "type": "object"
+  },
+  "VolumeAnalysisRead": {
+   "properties": {
+    "latest_252d_percentile": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Latest 252D Percentile"
+    },
+    "latest_vs_20d_average": {
+     "anyOf": [
+      {
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Latest Vs 20D Average"
+    }
+   },
+   "required": [
+    "latest_vs_20d_average",
+    "latest_252d_percentile"
+   ],
+   "title": "VolumeAnalysisRead",
+   "type": "object"
+  }
+ },
+ "operations": {
+  "create_portfolio": {
+   "method": "post",
+   "parameters": [],
+   "path": "/api/v1/portfolios",
+   "requestBody": {
+    "content": {
+     "application/json": {
+      "schema": {
+       "$ref": "#/components/schemas/PortfolioCreate"
+      }
+     }
+    },
+    "required": true
+   },
+   "responses": {
+    "201": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/PortfolioRead"
+       }
+      }
+     },
+     "description": "The new portfolio and its reusable UUID"
+    },
+    "409": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "`portfolio_name_exists`: the name is already in use."
+    },
+    "422": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "Invalid request data or a violated portfolio rule; inspect `code`."
+    }
+   }
+  },
+  "delete_portfolio": {
+   "method": "delete",
+   "parameters": [
+    [
+     "portfolio_id",
+     "path"
+    ]
+   ],
+   "path": "/api/v1/portfolios/{portfolio_id}",
+   "requestBody": null,
+   "responses": {
+    "204": {
+     "description": "Successful Response"
+    },
+    "404": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "`portfolio_not_found`."
+    },
+    "422": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "Invalid request data or a violated portfolio rule; inspect `code`."
+    }
+   }
+  },
+  "get_health": {
+   "method": "get",
+   "parameters": [],
+   "path": "/health",
+   "requestBody": null,
+   "responses": {
+    "200": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/HealthRead"
+       }
+      }
+     },
+     "description": "Current liveness state"
+    },
+    "422": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "Invalid request data or a violated portfolio rule; inspect `code`."
+    }
+   }
+  },
+  "get_market_history": {
+   "method": "get",
+   "parameters": [
+    [
+     "adjustment",
+     "query"
+    ],
+    [
+     "days",
+     "query"
+    ],
+    [
+     "end_date",
+     "query"
+    ],
+    [
+     "interval",
+     "query"
+    ],
+    [
+     "start_date",
+     "query"
+    ],
+    [
+     "ticker",
+     "path"
+    ]
+   ],
+   "path": "/api/v1/market/instruments/{ticker}/history",
+   "requestBody": null,
+   "responses": {
+    "200": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/HistoryRead"
+       }
+      }
+     },
+     "description": "Chronological bars plus request and provider provenance"
+    },
+    "422": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "Invalid request data or a violated portfolio rule; inspect `code`."
+    },
+    "503": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "`market_data_unavailable`: historical data could not be fetched."
+    }
+   }
+  },
+  "get_market_instrument": {
+   "method": "get",
+   "parameters": [
+    [
+     "ticker",
+     "path"
+    ]
+   ],
+   "path": "/api/v1/market/instruments/{ticker}",
+   "requestBody": null,
+   "responses": {
+    "200": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/MarketInstrumentRead"
+       }
+      }
+     },
+     "description": "Canonical metadata, quote provenance, and fixed technical indicators"
+    },
+    "422": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "Invalid request data or a violated portfolio rule; inspect `code`."
+    },
+    "503": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "`market_data_unavailable`: Yahoo failed and no cached quote exists."
+    }
+   }
+  },
+  "get_portfolio": {
+   "method": "get",
+   "parameters": [
+    [
+     "portfolio_id",
+     "path"
+    ]
+   ],
+   "path": "/api/v1/portfolios/{portfolio_id}",
+   "requestBody": null,
+   "responses": {
+    "200": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/PortfolioRead"
+       }
+      }
+     },
+     "description": "Portfolio identity and base currency"
+    },
+    "404": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "`portfolio_not_found`."
+    },
+    "422": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "Invalid request data or a violated portfolio rule; inspect `code`."
+    }
+   }
+  },
+  "get_portfolio_summary": {
+   "method": "get",
+   "parameters": [
+    [
+     "portfolio_id",
+     "path"
+    ]
+   ],
+   "path": "/api/v1/portfolios/{portfolio_id}/summary",
+   "requestBody": null,
+   "responses": {
+    "200": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/PortfolioSummary"
+       }
+      }
+     },
+     "description": "Complete valuation using the latest available quotes"
+    },
+    "404": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "`portfolio_not_found`."
+    },
+    "422": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "Invalid request data or a violated portfolio rule; inspect `code`."
+    },
+    "503": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "`market_data_unavailable` and no cached quote can value a position."
+    }
+   }
+  },
+  "get_technical_snapshot": {
+   "method": "get",
+   "parameters": [
+    [
+     "as_of",
+     "query"
+    ],
+    [
+     "benchmark",
+     "query"
+    ],
+    [
+     "event_date",
+     "query"
+    ],
+    [
+     "lookback_years",
+     "query"
+    ],
+    [
+     "ticker",
+     "path"
+    ]
+   ],
+   "path": "/api/v1/market/instruments/{ticker}/technical-snapshot",
+   "requestBody": null,
+   "responses": {
+    "200": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/TechnicalSnapshotRead"
+       }
+      }
+     },
+     "description": "Technical state, provenance, optional benchmark and event analysis"
+    },
+    "422": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "Invalid request data or a violated portfolio rule; inspect `code`."
+    },
+    "503": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "`market_data_unavailable`: primary ticker history could not be fetched."
+    }
+   }
+  },
+  "list_cash_transactions": {
+   "method": "get",
+   "parameters": [
+    [
+     "limit",
+     "query"
+    ],
+    [
+     "offset",
+     "query"
+    ],
+    [
+     "portfolio_id",
+     "path"
+    ]
+   ],
+   "path": "/api/v1/portfolios/{portfolio_id}/cash-transactions",
+   "requestBody": null,
+   "responses": {
+    "200": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/CashTransactionPage"
+       }
+      }
+     },
+     "description": "A reverse-chronological page of cash events"
+    },
+    "404": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "`portfolio_not_found`."
+    },
+    "422": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "Invalid request data or a violated portfolio rule; inspect `code`."
+    }
+   }
+  },
+  "list_portfolios": {
+   "method": "get",
+   "parameters": [],
+   "path": "/api/v1/portfolios",
+   "requestBody": null,
+   "responses": {
+    "200": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "items": {
+         "$ref": "#/components/schemas/PortfolioRead"
+        },
+        "title": "Response List Portfolios",
+        "type": "array"
+       }
+      }
+     },
+     "description": "Portfolios ordered by creation time"
+    },
+    "422": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "Invalid request data or a violated portfolio rule; inspect `code`."
+    }
+   }
+  },
+  "list_positions": {
+   "method": "get",
+   "parameters": [
+    [
+     "portfolio_id",
+     "path"
+    ],
+    [
+     "tag",
+     "query"
+    ],
+    [
+     "tag_mode",
+     "query"
+    ]
+   ],
+   "path": "/api/v1/portfolios/{portfolio_id}/positions",
+   "requestBody": null,
+   "responses": {
+    "200": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/PositionList"
+       }
+      }
+     },
+     "description": "Valued open positions that satisfy the tag filter"
+    },
+    "404": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "`portfolio_not_found`."
+    },
+    "422": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "Invalid request data or a violated portfolio rule; inspect `code`."
+    },
+    "503": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "A position cannot be valued because no quote is available."
+    }
+   }
+  },
+  "list_trades": {
+   "method": "get",
+   "parameters": [
+    [
+     "limit",
+     "query"
+    ],
+    [
+     "offset",
+     "query"
+    ],
+    [
+     "portfolio_id",
+     "path"
+    ]
+   ],
+   "path": "/api/v1/portfolios/{portfolio_id}/trades",
+   "requestBody": null,
+   "responses": {
+    "200": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/TradePage"
+       }
+      }
+     },
+     "description": "A reverse-chronological page of immutable trades"
+    },
+    "404": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "`portfolio_not_found`."
+    },
+    "422": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "Invalid request data or a violated portfolio rule; inspect `code`."
+    }
+   }
+  },
+  "record_cash_transaction": {
+   "method": "post",
+   "parameters": [
+    [
+     "portfolio_id",
+     "path"
+    ]
+   ],
+   "path": "/api/v1/portfolios/{portfolio_id}/cash-transactions",
+   "requestBody": {
+    "content": {
+     "application/json": {
+      "schema": {
+       "$ref": "#/components/schemas/CashTransactionCreate"
+      }
+     }
+    },
+    "required": true
+   },
+   "responses": {
+    "201": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/CashTransactionRead"
+       }
+      }
+     },
+     "description": "The immutable cash ledger entry"
+    },
+    "404": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "`portfolio_not_found`."
+    },
+    "409": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "`idempotency_conflict`."
+    },
+    "422": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "Invalid request data or a violated portfolio rule; inspect `code`."
+    }
+   }
+  },
+  "record_trade": {
+   "method": "post",
+   "parameters": [
+    [
+     "portfolio_id",
+     "path"
+    ]
+   ],
+   "path": "/api/v1/portfolios/{portfolio_id}/trades",
+   "requestBody": {
+    "content": {
+     "application/json": {
+      "schema": {
+       "$ref": "#/components/schemas/TradeCreate"
+      }
+     }
+    },
+    "required": true
+   },
+   "responses": {
+    "201": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/TradeRead"
+       }
+      }
+     },
+     "description": "The immutable trade ledger entry"
+    },
+    "404": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "`portfolio_not_found`."
+    },
+    "409": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "`idempotency_conflict`."
+    },
+    "422": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "Invalid request data or a violated portfolio rule; inspect `code`."
+    },
+    "503": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "Ticker metadata is unavailable and not cached."
+    }
+   }
+  },
+  "replace_position_tags": {
+   "method": "put",
+   "parameters": [
+    [
+     "portfolio_id",
+     "path"
+    ],
+    [
+     "ticker",
+     "path"
+    ]
+   ],
+   "path": "/api/v1/portfolios/{portfolio_id}/positions/{ticker}/tags",
+   "requestBody": {
+    "content": {
+     "application/json": {
+      "schema": {
+       "$ref": "#/components/schemas/TagsUpdate"
+      }
+     }
+    },
+    "required": true
+   },
+   "responses": {
+    "200": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/TagsRead"
+       }
+      }
+     },
+     "description": "The canonical replacement tag set"
+    },
+    "404": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "`portfolio_not_found` or no open `position` for the ticker."
+    },
+    "422": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     },
+     "description": "Invalid request data or a violated portfolio rule; inspect `code`."
+    }
+   }
+  }
+ },
+ "tools": {
+  "create_portfolio": {
+   "properties": {
+    "base_currency": {
+     "title": "Base Currency",
+     "type": "string"
+    },
+    "name": {
+     "title": "Name",
+     "type": "string"
+    }
+   },
+   "required": [
+    "name",
+    "base_currency"
+   ],
+   "title": "create_portfolioArguments",
+   "type": "object"
+  },
+  "delete_portfolio": {
+   "properties": {
+    "portfolio_id": {
+     "title": "Portfolio Id",
+     "type": "string"
+    }
+   },
+   "required": [
+    "portfolio_id"
+   ],
+   "title": "delete_portfolioArguments",
+   "type": "object"
+  },
+  "get_health": {
+   "properties": {},
+   "title": "get_healthArguments",
+   "type": "object"
+  },
+  "get_market_history": {
+   "properties": {
+    "adjustment": {
+     "default": "yfinance_auto_adjust",
+     "title": "Adjustment",
+     "type": "string"
+    },
+    "days": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Days"
+    },
+    "end_date": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "End Date"
+    },
+    "interval": {
+     "default": "1d",
+     "title": "Interval",
+     "type": "string"
+    },
+    "start_date": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Start Date"
+    },
+    "ticker": {
+     "title": "Ticker",
+     "type": "string"
+    }
+   },
+   "required": [
+    "ticker"
+   ],
+   "title": "get_market_historyArguments",
+   "type": "object"
+  },
+  "get_market_instrument": {
+   "properties": {
+    "ticker": {
+     "title": "Ticker",
+     "type": "string"
+    }
+   },
+   "required": [
+    "ticker"
+   ],
+   "title": "get_market_instrumentArguments",
+   "type": "object"
+  },
+  "get_portfolio": {
+   "properties": {
+    "portfolio_id": {
+     "title": "Portfolio Id",
+     "type": "string"
+    }
+   },
+   "required": [
+    "portfolio_id"
+   ],
+   "title": "get_portfolioArguments",
+   "type": "object"
+  },
+  "get_portfolio_summary": {
+   "properties": {
+    "portfolio_id": {
+     "title": "Portfolio Id",
+     "type": "string"
+    }
+   },
+   "required": [
+    "portfolio_id"
+   ],
+   "title": "get_portfolio_summaryArguments",
+   "type": "object"
+  },
+  "get_technical_snapshot": {
+   "properties": {
+    "as_of": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "As Of"
+    },
+    "benchmark": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Benchmark"
+    },
+    "event_date": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Event Date"
+    },
+    "lookback_years": {
+     "default": 5,
+     "title": "Lookback Years",
+     "type": "integer"
+    },
+    "ticker": {
+     "title": "Ticker",
+     "type": "string"
+    }
+   },
+   "required": [
+    "ticker"
+   ],
+   "title": "get_technical_snapshotArguments",
+   "type": "object"
+  },
+  "list_cash_transactions": {
+   "properties": {
+    "limit": {
+     "default": 50,
+     "title": "Limit",
+     "type": "integer"
+    },
+    "offset": {
+     "default": 0,
+     "title": "Offset",
+     "type": "integer"
+    },
+    "portfolio_id": {
+     "title": "Portfolio Id",
+     "type": "string"
+    }
+   },
+   "required": [
+    "portfolio_id"
+   ],
+   "title": "list_cash_transactionsArguments",
+   "type": "object"
+  },
+  "list_portfolios": {
+   "properties": {},
+   "title": "list_portfoliosArguments",
+   "type": "object"
+  },
+  "list_positions": {
+   "properties": {
+    "portfolio_id": {
+     "title": "Portfolio Id",
+     "type": "string"
+    },
+    "tag_mode": {
+     "default": "any",
+     "title": "Tag Mode",
+     "type": "string"
+    },
+    "tags": {
+     "anyOf": [
+      {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Tags"
+    }
+   },
+   "required": [
+    "portfolio_id"
+   ],
+   "title": "list_positionsArguments",
+   "type": "object"
+  },
+  "list_trades": {
+   "properties": {
+    "limit": {
+     "default": 50,
+     "title": "Limit",
+     "type": "integer"
+    },
+    "offset": {
+     "default": 0,
+     "title": "Offset",
+     "type": "integer"
+    },
+    "portfolio_id": {
+     "title": "Portfolio Id",
+     "type": "string"
+    }
+   },
+   "required": [
+    "portfolio_id"
+   ],
+   "title": "list_tradesArguments",
+   "type": "object"
+  },
+  "record_cash_transaction": {
+   "properties": {
+    "action": {
+     "title": "Action",
+     "type": "string"
+    },
+    "amount": {
+     "title": "Amount",
+     "type": "string"
+    },
+    "occurred_at": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Occurred At"
+    },
+    "portfolio_id": {
+     "title": "Portfolio Id",
+     "type": "string"
+    },
+    "request_id": {
+     "title": "Request Id",
+     "type": "string"
+    }
+   },
+   "required": [
+    "portfolio_id",
+    "request_id",
+    "action",
+    "amount"
+   ],
+   "title": "record_cash_transactionArguments",
+   "type": "object"
+  },
+  "record_trade": {
+   "properties": {
+    "executed_at": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Executed At"
+    },
+    "fee": {
+     "default": "0",
+     "title": "Fee",
+     "type": "string"
+    },
+    "portfolio_id": {
+     "title": "Portfolio Id",
+     "type": "string"
+    },
+    "quantity": {
+     "title": "Quantity",
+     "type": "string"
+    },
+    "request_id": {
+     "title": "Request Id",
+     "type": "string"
+    },
+    "side": {
+     "title": "Side",
+     "type": "string"
+    },
+    "ticker": {
+     "title": "Ticker",
+     "type": "string"
+    },
+    "unit_price": {
+     "title": "Unit Price",
+     "type": "string"
+    }
+   },
+   "required": [
+    "portfolio_id",
+    "request_id",
+    "ticker",
+    "side",
+    "quantity",
+    "unit_price"
+   ],
+   "title": "record_tradeArguments",
+   "type": "object"
+  },
+  "replace_position_tags": {
+   "properties": {
+    "portfolio_id": {
+     "title": "Portfolio Id",
+     "type": "string"
+    },
+    "tags": {
+     "items": {
+      "type": "string"
+     },
+     "title": "Tags",
+     "type": "array"
+    },
+    "ticker": {
+     "title": "Ticker",
+     "type": "string"
+    }
+   },
+   "required": [
+    "portfolio_id",
+    "ticker",
+    "tags"
+   ],
+   "title": "replace_position_tagsArguments",
+   "type": "object"
+  }
+ }
+}

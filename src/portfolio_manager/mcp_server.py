@@ -451,6 +451,123 @@ async def list_journal_events(
     )
 
 
+# --- Corporate actions ------------------------------------------------------
+
+
+@mcp.tool()
+async def record_corporate_action(
+    request_id: str,
+    ticker: str,
+    action_type: str,
+    ex_date: str,
+    source: str,
+    ratio: str | None = None,
+    cash_amount: str | None = None,
+    currency: str | None = None,
+    withholding_tax: str | None = None,
+    new_ticker: str | None = None,
+    cost_allocation_percent: str | None = None,
+    announcement_date: str | None = None,
+    record_date: str | None = None,
+    pay_date: str | None = None,
+    effective_at: str | None = None,
+    source_reference: str | None = None,
+) -> dict[str, Any]:
+    """Record an announced corporate action. This stores facts and changes no holding.
+
+    `action_type` is cash_dividend, interest, split, reverse_split, stock_dividend,
+    return_of_capital, symbol_change, merger, or spinoff. `ratio` is new shares per existing
+    share -- 2 for a 2-for-1 split, 0.5 for a 1-for-2 reverse split -- and is required for splits
+    and stock dividends. `cash_amount` is **per share**, not the total, and is required for
+    dividends, interest, and return of capital. Dates are RFC 3339.
+
+    Supply `cost_allocation_percent` only when the issuer actually disclosed it. Leaving it null
+    marks the action cost-basis unresolved, which is the correct outcome for an unknown
+    allocation: a guessed number is indistinguishable from a real one and silently corrupts every
+    later gain calculation. Apply it in a separate step after previewing.
+    """
+    payload: dict[str, Any] = {
+        "request_id": request_id,
+        "ticker": ticker,
+        "action_type": action_type,
+        "ex_date": ex_date,
+        "source": source,
+    }
+    for key, value in (
+        ("ratio", ratio),
+        ("cash_amount", cash_amount),
+        ("currency", currency),
+        ("withholding_tax", withholding_tax),
+        ("new_ticker", new_ticker),
+        ("cost_allocation_percent", cost_allocation_percent),
+        ("announcement_date", announcement_date),
+        ("record_date", record_date),
+        ("pay_date", pay_date),
+        ("effective_at", effective_at),
+        ("source_reference", source_reference),
+    ):
+        if value is not None:
+            payload[key] = value
+    return await _request("POST", "/api/v1/corporate-actions", json=payload)
+
+
+@mcp.tool()
+async def list_corporate_actions(
+    ticker: str | None = None,
+    status: str | None = None,
+    offset: int = 0,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """List recorded corporate actions and their status.
+
+    `status` is announced, confirmed, applied, or cancelled. Use this to find an action's ID
+    before previewing or applying it, and to see what has already been applied.
+    """
+    params: dict[str, Any] = {"offset": offset, "limit": limit}
+    if ticker is not None:
+        params["ticker"] = ticker
+    if status is not None:
+        params["status"] = status
+    return await _request("GET", "/api/v1/corporate-actions", params=params)
+
+
+@mcp.tool()
+async def preview_corporate_action_application(
+    portfolio_id: str, action_id: str
+) -> dict[str, Any]:
+    """Show exactly what applying an action would do to a portfolio, writing nothing.
+
+    Always call this before `apply_corporate_action`. Check `applicable`, `warnings`,
+    `fractional_handling`, and `cost_basis_unresolved`, and compare `original_quantity` and
+    `original_average_cost` against the resulting values. When this service cannot compute a
+    defensible cost basis -- a spin-off with no disclosed allocation, a return of capital
+    exceeding basis -- `applicable` is false and the reason is in `warnings`. Report that
+    honestly rather than applying the action some other way.
+    """
+    return await _request(
+        "GET",
+        f"/api/v1/portfolios/{portfolio_id}/corporate-actions/{action_id}/preview",
+    )
+
+
+@mcp.tool()
+async def apply_corporate_action(
+    portfolio_id: str, action_id: str, request_id: str
+) -> dict[str, Any]:
+    """Apply a recorded action to a portfolio atomically.
+
+    The journal event and the holding change commit together. An action can be applied to a given
+    portfolio only once, so re-running this cannot double-apply a split. A split changes share
+    count and unit cost while leaving total cost basis unchanged; a cash dividend pays net of
+    withholding and leaves the share count alone.
+    """
+    return await _request(
+        "POST",
+        f"/api/v1/portfolios/{portfolio_id}/corporate-actions/{action_id}/apply",
+        json={"request_id": request_id},
+    )
+
+
 # --- Instruments ------------------------------------------------------------
 
 

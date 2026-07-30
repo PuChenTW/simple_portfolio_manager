@@ -5,7 +5,7 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
-from .journal import EventType, FlowClassification
+from .journal import ActionType, EventType, FlowClassification
 from .market import HistoryAdjustment, HistoryInterval
 from .taxonomy import Provenance
 
@@ -714,6 +714,143 @@ class JournalEventPage(ApiModel):
     total: int
     offset: int
     limit: int
+
+
+class CorporateActionCreate(ApiModel):
+    """Record an announced corporate action as a fact about an instrument."""
+
+    request_id: RequestId
+    ticker: str = Field(description="Instrument the action applies to.", examples=["AAPL"])
+    action_type: ActionType = Field(
+        description=(
+            "cash_dividend, interest, split, reverse_split, stock_dividend, return_of_capital, "
+            "symbol_change, merger, or spinoff."
+        ),
+        examples=["split"],
+    )
+    ex_date: datetime = Field(description="Ex-date; holdings before this date qualify.")
+    source: str = Field(
+        description="Where these facts came from, retained for audit.",
+        examples=["issuer announcement"],
+    )
+    ratio: Decimal | None = Field(
+        default=None,
+        description=(
+            "New shares per existing share. 2 for a 2-for-1 split, 0.5 for a 1-for-2 reverse "
+            "split. Required for splits and stock dividends."
+        ),
+    )
+    cash_amount: Decimal | None = Field(
+        default=None,
+        description=(
+            "Cash **per share**, not the total. Required for dividends, interest, and return "
+            "of capital."
+        ),
+    )
+    currency: str | None = None
+    withholding_tax: Decimal | None = Field(
+        default=None, description="Total withholding on the distribution, if any."
+    )
+    new_ticker: str | None = Field(
+        default=None, description="Successor instrument for a merger, spin-off, or symbol change."
+    )
+    cost_allocation_percent: Decimal | None = Field(
+        default=None,
+        description=(
+            "Percent of original basis staying with the original instrument. Supply only when the "
+            "issuer disclosed it; leaving it null marks the action cost-basis unresolved rather "
+            "than guessing an allocation."
+        ),
+    )
+    announcement_date: datetime | None = None
+    record_date: datetime | None = None
+    pay_date: datetime | None = None
+    effective_at: datetime | None = Field(
+        default=None, description="Defaults to the ex-date."
+    )
+    source_reference: str | None = None
+
+
+class CorporateActionRead(ApiModel):
+    """A recorded corporate action."""
+
+    id: str
+    instrument_id: str
+    action_type: str
+    status: str
+    ex_date: datetime
+    record_date: datetime | None
+    pay_date: datetime | None
+    effective_at: datetime
+    ratio: Decimal | None
+    cash_amount: Decimal | None
+    currency: str | None
+    withholding_tax: Decimal | None
+    new_instrument_id: str | None
+    cost_allocation_percent: Decimal | None
+    cost_basis_unresolved: bool = Field(
+        description=(
+            "True when the correct basis treatment is unknown. The action is still recorded; it "
+            "is never applied with an invented allocation."
+        )
+    )
+    source: str
+    source_reference: str | None
+    created_at: datetime
+
+
+class CorporateActionPage(ApiModel):
+    """A page of recorded corporate actions."""
+
+    items: list[CorporateActionRead]
+    total: int
+    offset: int
+    limit: int
+
+
+class CorporateActionPreview(ApiModel):
+    """What applying an action would do, computed without writing anything."""
+
+    portfolio_id: str
+    action_id: str
+    action_type: str
+    applicable: bool = Field(
+        description="False when the action cannot be applied; see `warnings` for why."
+    )
+    original_quantity: Decimal | None
+    original_average_cost: Decimal | None
+    resulting_quantity: Decimal | None
+    resulting_average_cost: Decimal | None
+    cash_amount: Decimal | None
+    withholding_tax: Decimal | None
+    cash_in_lieu: Decimal | None
+    fractional_handling: str | None
+    cost_basis_unresolved: bool
+    legs: list[JournalLegRead] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class CorporateActionApply(ApiModel):
+    """Apply a recorded action to one portfolio."""
+
+    request_id: RequestId
+
+
+class CorporateActionApplicationRead(ApiModel):
+    """The record of an action having been applied, with before and after values."""
+
+    id: str
+    corporate_action_id: str
+    portfolio_id: str
+    journal_event_id: str | None
+    original_quantity: Decimal | None
+    original_average_cost: Decimal | None
+    resulting_quantity: Decimal | None
+    resulting_average_cost: Decimal | None
+    cash_in_lieu: Decimal | None
+    fractional_handling: str | None
+    status: str
+    created_at: datetime
 
 
 class ErrorResponse(ApiModel):

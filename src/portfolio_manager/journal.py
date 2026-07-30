@@ -55,6 +55,31 @@ class EventStatus(StrEnum):
     REVERSED = "reversed"
 
 
+class ActionType(StrEnum):
+    """Corporate action vocabulary.
+
+    Lives here rather than in `corporate_actions` so the API schemas can name these values
+    without importing the service layer, which imports the schemas in turn.
+    """
+
+    CASH_DIVIDEND = "cash_dividend"
+    INTEREST = "interest"
+    SPLIT = "split"
+    REVERSE_SPLIT = "reverse_split"
+    STOCK_DIVIDEND = "stock_dividend"
+    RETURN_OF_CAPITAL = "return_of_capital"
+    SYMBOL_CHANGE = "symbol_change"
+    MERGER = "merger"
+    SPINOFF = "spinoff"
+
+
+class ActionStatus(StrEnum):
+    ANNOUNCED = "announced"
+    CONFIRMED = "confirmed"
+    APPLIED = "applied"
+    CANCELLED = "cancelled"
+
+
 class FlowClassification(StrEnum):
     """Whether an event moves money across the portfolio boundary.
 

@@ -10,6 +10,12 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from .config import settings
+from .corporate_actions import (
+    apply_corporate_action,
+    list_actions,
+    preview_application,
+    record_corporate_action,
+)
 from .db import get_session
 from .errors import DomainError
 from .identity import (
@@ -33,6 +39,12 @@ from .schemas import (
     CashTransactionPage,
     CashTransactionRead,
     ClassificationOverrideUpdate,
+    CorporateActionApplicationRead,
+    CorporateActionApply,
+    CorporateActionCreate,
+    CorporateActionPage,
+    CorporateActionPreview,
+    CorporateActionRead,
     ErrorResponse,
     HealthRead,
     HistoryBarRead,
@@ -81,8 +93,11 @@ Local, single-user portfolio accounting API designed for autonomous agents and g
 - **This records completed transactions; it never places market orders.**
 - Every portfolio has exactly one `base_currency`. A trade is rejected unless the instrument's
   quote currency matches it. Use separate portfolios for USD and TWD assets.
-- Asset trades and cash are independent ledgers. Recording a buy does **not** deduct cash, and
-  recording a sell does **not** deposit proceeds. Record cash events separately when needed.
+- `record_transaction` posts a settlement atomically: security, cash, fee, and tax legs commit
+  together or not at all. Prefer it for anything that moves cash and a position at once.
+- The older `record_trade` and `record_cash_transaction` remain independent ledgers with unchanged
+  semantics: recording a buy does **not** deduct cash, and a sell does **not** deposit proceeds.
+  They are retained for compatibility; new work should use `record_transaction`.
 - Send decimal values as JSON strings for exact input. Decimal values in responses are strings.
 - All timestamps are UTC RFC 3339 values. Omitted transaction times default to server time.
 - Mutation requests require a client-generated `request_id`. Retrying the same body with the same
@@ -92,12 +107,23 @@ Local, single-user portfolio accounting API designed for autonomous agents and g
 ## Recommended workflow
 
 1. Call `create_portfolio` once and retain its `id`.
-2. Optionally call `record_cash_transaction` to establish cash.
+2. Call `record_transaction` with `deposit` to establish cash.
 3. Call `get_market_instrument` to validate a ticker and inspect its currency and quote timestamp.
-4. Call `record_trade` with the actual execution price, quantity, and fee.
-5. Call `replace_position_tags` to attach strategy context.
-6. Call `get_portfolio_summary` for valuation, allocation, and P&L, or `list_positions` to filter
+4. Call `get_instrument_profile` when the asset class matters: `asset_type` is a coarse legacy
+   field that reports every non-crypto symbol as "stock".
+5. Call `record_transaction` with the actual execution price, quantity, and fee.
+6. Call `replace_position_tags` to attach strategy context.
+7. Call `get_portfolio_summary` for valuation, allocation, and P&L, or `list_positions` to filter
    holdings by tags.
+8. When an issuer announces a split or dividend, call `record_corporate_action`, then
+   `preview_corporate_action_application`, then `apply_corporate_action`.
+
+## Data transparency
+
+Derived values report where they came from. Classification fields carry a `provenance`; journal
+events carry a `balance` proving the legs net to zero and a `flow_classification` distinguishing
+investor money from portfolio returns. Values this service cannot determine are reported as
+unclassified or unresolved with a warning, never filled with a plausible default.
 
 ## Market-data reliability
 
@@ -163,6 +189,15 @@ OPENAPI_TAGS = [
             "Posted events are immutable: corrections are reversals, never edits or deletes."
         ),
     },
+    {
+        "name": "corporate-actions",
+        "description": (
+            "Splits, dividends, and other issuer events. Recording an action and applying it to a "
+            "portfolio are separate steps, with a preview in between. Actions whose cost-basis "
+            "treatment depends on undisclosed or jurisdiction-specific rules are reported as "
+            "unresolved rather than applied with an invented allocation."
+        ),
+    },
 ]
 
 GLOBAL_RESPONSES = {
@@ -178,23 +213,33 @@ AGENT_SKILL_METADATA = {
         "Track completed trades, cash, allocation, and P&L, and research historical market state."
     ),
     "instructions": [
-        "Never describe record_trade as placing or executing an order.",
+        "Never describe recording a transaction as placing or executing an order.",
         "Keep every portfolio single-currency and verify ticker currency before a trade.",
-        "Treat trades and cash as independent ledgers; update both only when explicitly intended.",
+        "Prefer record_transaction, which posts a position and its settlement cash atomically.",
+        "record_trade and record_cash_transaction are legacy independent ledgers; a buy recorded "
+        "through record_trade does not deduct cash.",
         "Generate one unique request_id per logical mutation and reuse it only for exact retries.",
         "Check stale, provider_as_of, fetched_at, and warnings before using a market price.",
         "Send exact quantities and monetary values as decimal strings.",
         "Branch on the error code and retry only transient market_data_unavailable failures.",
         "For company research, pass the report cutoff as technical-snapshot as_of.",
         "Inspect provider, actual as-of, adjustment, and warnings before interpreting indicators.",
+        "Use get_instrument_profile for asset class; asset_type reports every non-crypto symbol "
+        "as stock, so an ETF and a commodity trust are indistinguishable there.",
+        "Prefer a classification with manual_override or verified_internal provenance over "
+        "provider or derived.",
+        "Report unclassified and cost_basis_unresolved values as unknown; never substitute an "
+        "assumed value.",
+        "Preview a corporate action before applying it, and never invent a cost allocation.",
     ],
     "workflow": [
         "list_portfolios or create_portfolio",
-        "get_market_instrument",
+        "get_market_instrument and get_instrument_profile",
         "get_market_history or get_technical_snapshot for market research",
-        "record_trade and optionally record_cash_transaction",
+        "record_transaction for deposits, trades, and income",
         "replace_position_tags",
         "get_portfolio_summary or list_positions",
+        "record_corporate_action, preview_corporate_action_application, apply_corporate_action",
     ],
 }
 
@@ -981,6 +1026,189 @@ def _event_detail_response(
         flow_classification=detail["flow_classification"],
         reverses_event_id=detail["reverses_event_id"],
         reversed_by_event_id=detail["reversed_by_event_id"],
+    )
+
+
+@app.post(
+    "/api/v1/corporate-actions",
+    response_model=CorporateActionRead,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="record_corporate_action",
+    summary="Record an announced corporate action",
+    response_description="The stored action, including whether its cost basis is unresolved",
+    tags=["corporate-actions"],
+)
+def post_corporate_action(
+    data: CorporateActionCreate, session: SessionDep, market: MarketDep
+) -> CorporateActionRead:
+    """
+    Store the facts of an announced action. This records only; it does not change any holding.
+
+    Recording and applying are deliberately separate: an action is a fact about an instrument,
+    while applying it changes a specific portfolio. Supply `cost_allocation_percent` only when the
+    issuer disclosed it -- leaving it null marks the action cost-basis unresolved, which is
+    reported honestly rather than filled with a guess that would corrupt later gain calculations.
+    """
+    _resolve_or_fetch(session, market, data.ticker)
+    if data.new_ticker:
+        _resolve_or_fetch(session, market, data.new_ticker)
+    action = record_corporate_action(
+        session,
+        request_id=data.request_id,
+        instrument_reference=data.ticker,
+        action_type=data.action_type,
+        ex_date=data.ex_date,
+        source=data.source,
+        ratio=data.ratio,
+        cash_amount=data.cash_amount,
+        currency=data.currency,
+        withholding_tax=data.withholding_tax,
+        new_instrument_reference=data.new_ticker,
+        cost_allocation_percent=data.cost_allocation_percent,
+        announcement_date=data.announcement_date,
+        record_date=data.record_date,
+        pay_date=data.pay_date,
+        effective_at=data.effective_at,
+        source_reference=data.source_reference,
+    )
+    return CorporateActionRead.model_validate(action)
+
+
+@app.get(
+    "/api/v1/corporate-actions",
+    response_model=CorporateActionPage,
+    operation_id="list_corporate_actions",
+    summary="List recorded corporate actions",
+    response_description="Matching actions, most recent ex-date first",
+    tags=["corporate-actions"],
+)
+def read_corporate_actions(
+    session: SessionDep,
+    ticker: Annotated[str | None, Query(description="Filter to one instrument.")] = None,
+    action_status: Annotated[
+        str | None,
+        Query(
+            alias="status",
+            description="announced, confirmed, applied, or cancelled.",
+        ),
+    ] = None,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> CorporateActionPage:
+    """List announced actions and their current status."""
+    actions, total = list_actions(
+        session,
+        instrument_reference=ticker,
+        status=action_status,
+        offset=offset,
+        limit=limit,
+    )
+    return CorporateActionPage(
+        items=[CorporateActionRead.model_validate(action) for action in actions],
+        total=total,
+        offset=offset,
+        limit=limit,
+    )
+
+
+@app.get(
+    "/api/v1/portfolios/{portfolio_id}/corporate-actions/{action_id}/preview",
+    response_model=CorporateActionPreview,
+    operation_id="preview_corporate_action_application",
+    summary="Preview an action's effect without applying it",
+    response_description="Before and after values, legs, rounding, and unresolved questions",
+    responses={
+        404: {
+            "model": ErrorResponse,
+            "description": "`portfolio_not_found` or `corporate_action_not_found`.",
+        }
+    },
+    tags=["corporate-actions"],
+)
+def read_corporate_action_preview(
+    portfolio_id: PortfolioId,
+    action_id: Annotated[str, Path(description="The recorded action to evaluate.")],
+    session: SessionDep,
+) -> CorporateActionPreview:
+    """
+    Compute exactly what applying an action would do, writing nothing.
+
+    Inspect `applicable`, `warnings`, `fractional_handling`, and `cost_basis_unresolved` before
+    applying. An action this service cannot compute a defensible basis for returns
+    `applicable: false` with the reason, rather than an approximate result.
+    """
+    return _preview_response(preview_application(session, portfolio_id, action_id))
+
+
+@app.post(
+    "/api/v1/portfolios/{portfolio_id}/corporate-actions/{action_id}/apply",
+    response_model=CorporateActionApplicationRead,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="apply_corporate_action",
+    summary="Apply a recorded action to a portfolio",
+    response_description="The application record with before and after values",
+    responses={
+        404: {
+            "model": ErrorResponse,
+            "description": "`portfolio_not_found` or `corporate_action_not_found`.",
+        },
+        422: {
+            "model": ErrorResponse,
+            "description": (
+                "`action_not_applicable`: not held, already applied, or basis is unresolved."
+            ),
+        },
+    },
+    tags=["corporate-actions"],
+)
+def post_corporate_action_application(
+    portfolio_id: PortfolioId,
+    action_id: Annotated[str, Path(description="The recorded action to apply.")],
+    data: CorporateActionApply,
+    session: SessionDep,
+) -> CorporateActionApplicationRead:
+    """
+    Apply an action atomically: the journal event and the holding change commit together.
+
+    An action can be applied to a portfolio only once, so a repeated run cannot double-apply a
+    split. Call the preview endpoint first to see the rounding and any unresolved treatment.
+    """
+    application = apply_corporate_action(
+        session, portfolio_id, action_id, request_id=data.request_id
+    )
+    return CorporateActionApplicationRead.model_validate(application)
+
+
+def _preview_response(preview) -> CorporateActionPreview:
+    return CorporateActionPreview(
+        portfolio_id=preview.portfolio_id,
+        action_id=preview.action_id,
+        action_type=preview.action_type,
+        applicable=preview.applicable,
+        original_quantity=preview.original_quantity,
+        original_average_cost=preview.original_average_cost,
+        resulting_quantity=preview.resulting_quantity,
+        resulting_average_cost=preview.resulting_average_cost,
+        cash_amount=preview.cash_amount,
+        withholding_tax=preview.withholding_tax,
+        cash_in_lieu=preview.cash_in_lieu,
+        fractional_handling=preview.fractional_handling,
+        cost_basis_unresolved=preview.cost_basis_unresolved,
+        legs=[
+            JournalLegRead(
+                leg_type=leg.leg_type.value,
+                account_role=leg.account_role,
+                currency=leg.currency,
+                instrument_id=leg.instrument_id,
+                quantity_delta=leg.quantity_delta,
+                amount_delta=leg.amount_delta,
+                unit_price=leg.unit_price,
+                fx_rate=leg.fx_rate,
+                metadata=leg.metadata,
+            )
+            for leg in preview.legs
+        ],
+        warnings=preview.warnings,
     )
 
 

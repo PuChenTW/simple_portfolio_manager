@@ -18,6 +18,7 @@ dependencies = [
 [project.scripts]
 portfolio-manager = "portfolio_manager.__main__:main"
 portfolio-mcp = "portfolio_manager.mcp_server:main"
+portfolio-admin = "portfolio_manager.cli:main"
 
 [dependency-groups]
 dev = [

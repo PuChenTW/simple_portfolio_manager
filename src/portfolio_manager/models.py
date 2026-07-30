@@ -272,6 +272,78 @@ class JournalLeg(Base):
     leg_metadata: Mapped[str | None] = mapped_column(Text())
 
 
+class CorporateAction(Base):
+    """A corporate action as announced, independent of any portfolio it may affect."""
+
+    __tablename__ = "corporate_actions"
+    __table_args__ = (
+        UniqueConstraint("request_id", name="uq_corporate_action_request"),
+        Index("ix_corporate_actions_instrument", "instrument_id", "ex_date"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    request_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    instrument_id: Mapped[str] = mapped_column(
+        ForeignKey("instruments.instrument_id", ondelete="RESTRICT"), nullable=False
+    )
+    action_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    status: Mapped[str] = mapped_column(String(15), nullable=False)
+    announcement_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ex_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    record_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    pay_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    effective_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Ratio semantics depend on action_type: 2 for a 2-for-1 split, 0.5 for a reverse split.
+    ratio: Mapped[Decimal | None] = mapped_column(DecimalText())
+    cash_amount: Mapped[Decimal | None] = mapped_column(DecimalText())
+    currency: Mapped[str | None] = mapped_column(String(3))
+    withholding_tax: Mapped[Decimal | None] = mapped_column(DecimalText())
+    new_instrument_id: Mapped[str | None] = mapped_column(
+        ForeignKey("instruments.instrument_id", ondelete="RESTRICT")
+    )
+    # Null when the correct basis split is genuinely unknown. Never filled with a guess: an
+    # invented allocation silently corrupts every future gain calculation.
+    cost_allocation_percent: Mapped[Decimal | None] = mapped_column(DecimalText())
+    cost_basis_unresolved: Mapped[bool] = mapped_column(
+        Boolean(), nullable=False, default=False
+    )
+    source: Mapped[str] = mapped_column(String(100), nullable=False)
+    source_reference: Mapped[str | None] = mapped_column(String(200))
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class CorporateActionApplication(Base):
+    """A record that one action was applied to one portfolio, and what it did."""
+
+    __tablename__ = "corporate_action_applications"
+    __table_args__ = (
+        UniqueConstraint(
+            "corporate_action_id", "portfolio_id", name="uq_action_applied_once"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    corporate_action_id: Mapped[str] = mapped_column(
+        ForeignKey("corporate_actions.id", ondelete="CASCADE"), nullable=False
+    )
+    portfolio_id: Mapped[str] = mapped_column(
+        ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False
+    )
+    journal_event_id: Mapped[str | None] = mapped_column(
+        ForeignKey("journal_events.id", ondelete="RESTRICT")
+    )
+    original_quantity: Mapped[Decimal | None] = mapped_column(DecimalText())
+    original_average_cost: Mapped[Decimal | None] = mapped_column(DecimalText())
+    resulting_quantity: Mapped[Decimal | None] = mapped_column(DecimalText())
+    resulting_average_cost: Mapped[Decimal | None] = mapped_column(DecimalText())
+    cash_in_lieu: Mapped[Decimal | None] = mapped_column(DecimalText())
+    fractional_handling: Mapped[str | None] = mapped_column(String(30))
+    status: Mapped[str] = mapped_column(String(15), nullable=False)
+    warnings: Mapped[str | None] = mapped_column(Text())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class QuoteCache(Base):
     __tablename__ = "quote_cache"
 
