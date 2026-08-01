@@ -15,7 +15,10 @@ configuration belong in `db.py` and `config.py`. Database migrations live under
 in `tests/conftest.py`. The read-only dashboard in `static/` is plain HTML, CSS, and vanilla JS
 with no build step and no external libraries -- the NAV chart is hand-rolled SVG. Verify frontend
 changes with Playwright against the running service, not by inspection. Docker deployment files are
-`Dockerfile` and `compose.yaml`.
+`Dockerfile` and `compose.yaml`. The Dockerfile installs dependencies from `pyproject.toml` and
+`uv.lock` alone, before `src/` is copied, so a source edit rebuilds in about a second instead of
+resyncing every dependency. Keep `COPY src` below that step; moving it above ties the whole
+dependency install to every source change.
 
 Data-transparency modules build on that core. `taxonomy.py` holds the asset-class and
 security-type vocabulary plus provenance ranking; `identity.py` resolves stable instrument IDs,
