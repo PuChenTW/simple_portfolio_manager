@@ -1,8 +1,14 @@
 # Local Portfolio Manager
 
 A local FastAPI service designed for agents that need to track cash, US and Taiwan stocks,
-and cryptocurrencies. It keeps an auditable transaction ledger, calculates moving-average
-cost and profit/loss, and caches Yahoo Finance quotes with explicit timestamps.
+and cryptocurrencies. It keeps an auditable double-entry journal, values holdings on any past
+date, measures return, and reports several portfolios together in one currency.
+
+Its governing rule is that a value the service cannot determine is reported as undetermined. A
+holding it cannot price is excluded and the snapshot marked partial; a currency pair it cannot
+resolve leaves the amount unconverted with a coverage percentage; a classification it cannot
+establish stays `unclassified`. Nothing is filled with a plausible default, because an invented
+number is indistinguishable from a real one once written.
 
 ## Setup
 
@@ -13,9 +19,11 @@ uv run portfolio-manager
 ```
 
 The server listens on `http://127.0.0.1:8001`. OpenAPI documentation is available at
-`http://127.0.0.1:8001/docs`. The read-only Traditional Chinese portfolio dashboard is available
-at `http://127.0.0.1:8001/`; it reads the existing portfolios and their latest summaries without
-changing trades or cash. The service remains bound to loopback only.
+`http://127.0.0.1:8001/docs`. The service remains bound to loopback only.
+
+The read-only Traditional Chinese dashboard at `http://127.0.0.1:8001/` has four tabs: current
+holdings, historical performance (NAV series with TWR and XIRR), data quality (classification
+provenance and the journal), and the cross-currency consolidated total. It never changes data.
 
 Set `PORTFOLIO_DB_PATH` to choose the SQLite database file. Quote data is fresh for 300
 seconds by default; override it with `PORTFOLIO_QUOTE_TTL_SECONDS`.
@@ -30,27 +38,96 @@ curl -X POST http://127.0.0.1:8001/api/v1/portfolios \
   -d '{"name":"US long term","base_currency":"USD"}'
 ```
 
-Use the returned portfolio ID to deposit cash and record a trade. `request_id` should be a
-new UUID or another client-generated unique value for every logical mutation; retrying the
-same payload with the same ID is safe.
+Use the returned portfolio ID to post transactions. `request_id` should be a new UUID or another
+client-generated unique value for every logical mutation; retrying the same payload with the same
+ID is safe.
 
 ```bash
-curl -X POST http://127.0.0.1:8001/api/v1/portfolios/PORTFOLIO_ID/cash-transactions \
+curl -X POST http://127.0.0.1:8001/api/v1/portfolios/PORTFOLIO_ID/transactions \
   -H 'content-type: application/json' \
-  -d '{"request_id":"cash-001","action":"deposit","amount":"10000"}'
+  -d '{"request_id":"dep-001","transaction_type":"deposit","amount":"10000"}'
 
-curl -X POST http://127.0.0.1:8001/api/v1/portfolios/PORTFOLIO_ID/trades \
+curl -X POST http://127.0.0.1:8001/api/v1/portfolios/PORTFOLIO_ID/transactions \
   -H 'content-type: application/json' \
-  -d '{"request_id":"trade-001","ticker":"AAPL","side":"buy","quantity":"10","unit_price":"200","fee":"1"}'
+  -d '{"request_id":"buy-001","transaction_type":"buy","ticker":"AAPL","quantity":"10","unit_price":"200","fee":"1"}'
 ```
+
+`record_transaction` posts the security, cash, fee, and tax legs in one database transaction, so
+a position can never move without its settlement. Prefer it for anything that moves cash and a
+position together.
+
+The older `record_trade` and `record_cash_transaction` remain as independent ledgers with
+unchanged semantics: a buy recorded through `record_trade` does **not** deduct cash. They are
+retained for compatibility with data recorded before the journal existed; new work should not
+use them.
 
 Read the full valuation at `/api/v1/portfolios/PORTFOLIO_ID/summary`. Prices, quantities,
 and amounts are JSON decimal strings. All timestamps are UTC RFC 3339 values.
 
 Ticker conventions are `AAPL` for US stocks, `2330.TW` for TWSE, `8069.TWO` for TPEX, and
 `BTC-USD` for crypto. A portfolio only accepts assets whose quote currency matches its base
-currency; use separate portfolios for TWD and USD holdings. Trades and cash are deliberately
-managed separately and trades never alter cash automatically.
+currency; use separate portfolios for TWD and USD holdings, then group them for a combined view.
+
+## Historical valuation and performance
+
+The journal is the source of truth, so any past date can be rebuilt from it. A snapshot replays
+the journal to a cutoff and prices the result with history bounded by that same date — never
+with today's quote, which would make a backfilled series look like it predicted the market.
+
+```bash
+# Build daily snapshots over a range. Safe to re-run: existing dates are skipped, so an
+# interrupted run is resumed by repeating the command.
+uv run portfolio-admin rebuild-snapshots PORTFOLIO_ID 2026-07-01 2026-07-31
+
+curl 'http://127.0.0.1:8001/api/v1/portfolios/PORTFOLIO_ID/performance?start_date=2026-07-01&end_date=2026-07-31'
+```
+
+Two returns come back because they answer different questions. `twr_percent` removes the effect
+of deposits and withdrawals, so it measures the holdings and is what you compare against a
+benchmark. `xirr_percent` keeps that effect, so it measures what the investor earned on the
+capital actually at risk. Neither is `total_pnl / cost_basis`, which is not a return.
+
+Check `coverage.is_reliable` before quoting either. It is false when the snapshot series has
+gaps, contains partial valuations, or the portfolio still holds migrated cash events awaiting a
+ruling — each biases the result in a direction the service cannot correct.
+
+### Legacy cash that predates the journal
+
+The pre-journal model recorded trades and cash as separate ledgers, so a cash row could be a
+trade settlement or an investor deposit and nothing distinguishes them. Migrating guesses
+nothing; it marks such rows for review:
+
+```bash
+uv run portfolio-admin backfill-journal
+uv run portfolio-admin review-flows PORTFOLIO_ID
+uv run portfolio-admin set-flow EVENT_ID internal --reason "Settles the same-day purchase"
+```
+
+`review-flows` proposes a classification with its evidence — chiefly whether a day's trades net
+to that day's cash movement — but never applies one. A ruling is recorded beside the event
+rather than editing it, and `--retract` restores the derived value.
+
+## Consolidating across currencies
+
+Holdings in different currencies cannot simply be added. Group the portfolios and pick a
+reporting currency:
+
+```bash
+curl -X POST http://127.0.0.1:8001/api/v1/portfolio-groups \
+  -H 'content-type: application/json' \
+  -d '{"name":"Everything","reporting_currency":"USD","portfolio_ids":["ID_A","ID_B"]}'
+
+curl 'http://127.0.0.1:8001/api/v1/portfolio-groups/GROUP_ID/summary'
+```
+
+Every position keeps its local value beside the converted one, along with the rate used, the
+path it took (direct, inverted, or crossed through an intermediary), and that rate's own date.
+Read `converted_value_coverage_percent` and `unconverted` before using `total_value`: a pair
+that cannot be resolved leaves the amount out of the total rather than converting it at a guess,
+so the total may legitimately understate the group.
+
+`issuer_exposure` aggregates listings of one company — an ADR and its local line — into a single
+economic exposure while leaving the individual positions separate.
 
 ## Market research
 
@@ -103,11 +180,14 @@ retry guidance, error codes, quote freshness rules, and a recommended end-to-end
 
 When wrapping the API as a skill, preserve these core instructions from the OpenAPI description:
 
-- trades record completed executions and never place orders or alter cash;
+- transactions record completed executions and never place orders;
 - each portfolio accepts only instruments in its base currency;
 - use a fresh `request_id` for each logical mutation and reuse it only for exact retries;
 - check `stale`, quote timestamps, and `warnings` before making a market-dependent decision;
-- send exact financial inputs as decimal strings and branch on machine-readable error `code`.
+- send exact financial inputs as decimal strings and branch on machine-readable error `code`;
+- report coverage alongside any derived figure — a partial snapshot, an unconverted currency, or
+  an unruled cash event changes what a number means, and presenting it as settled is the failure
+  this service is built to prevent.
 
 ## MCP server
 
@@ -164,6 +244,15 @@ get_technical_snapshot(
   ticker="AAPL", as_of="2026-07-24", benchmark="^GSPC",
   event_date="2026-04-30", lookback_years=5
 )
+```
+
+Analysis clients can call:
+
+```text
+rebuild_valuation_snapshots(portfolio_id=..., start_date="2026-07-01", end_date="2026-07-31")
+get_portfolio_performance(portfolio_id=..., start_date="2026-07-01", end_date="2026-07-31")
+get_consolidated_summary(group_id=...)
+get_instrument_profile(reference="TSM")
 ```
 
 ## Quality checks

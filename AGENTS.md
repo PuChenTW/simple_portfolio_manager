@@ -75,15 +75,23 @@ that existed before the identity and journal work. Adding to the surface is fine
 removing anything in the baseline fails `test_backward_compatibility.py` and requires an explicit
 version bump rather than a regenerated baseline. `test_migrations.py` additionally asserts that
 the migrated schema matches the ORM models, since the test harness builds tables from the ORM
-while production runs Alembic.
+while production runs Alembic. `test_mcp_server.py` asserts every API operation has a matching
+MCP tool, so adding an endpoint without its tool fails the suite rather than shipping a surface
+agents cannot reach.
+
+A warning nobody can ever clear is worse than no warning: it teaches readers to ignore the ones
+that matter. Before reporting a gap, check whether the user can actually act on it -- migrated
+trades carry no cash leg, so their missing settlement linkage is a permanent fact about the data,
+not an open task, and it is counted separately from the unruled cash events that genuinely bias a
+return.
 
 ## Commit & Pull Request Guidelines
 
-The repository has no commit history yet. Use concise imperative commits such as
-`Add stale quote fallback` or `Document trade idempotency`. Keep unrelated changes separate. Pull
-requests should explain behavior changes, list verification commands, note schema migrations
-or API compatibility impact, and include example requests/responses when the OpenAPI contract
-changes. Screenshots are unnecessary for this API-only project.
+Use concise imperative commits such as `Add stale quote fallback` or `Document trade
+idempotency`. Keep unrelated changes separate. Pull requests should explain behavior changes,
+list verification commands, note schema migrations or API compatibility impact, and include
+example requests/responses when the OpenAPI contract changes. Dashboard changes should say what
+was verified in a browser and at which widths.
 
 ## Security & Agent-Specific Rules
 
@@ -92,7 +100,9 @@ files, credentials, or provider secrets. Trades record completed executions only
 place orders or alter cash. Preserve single-currency portfolios, mutation `request_id`
 idempotency, stale-quote warnings, and machine-readable `{code, message, details}` errors.
 
-Three invariants govern the data-transparency work and must not be weakened:
+Five invariants govern the data-transparency work and must not be weakened. They share one idea:
+a value this service cannot determine is reported as undetermined, because an invented number is
+indistinguishable from a real one once written.
 
 1. **Never guess.** A classification, cost allocation, or trade-to-cash linkage that cannot be
    determined stays `unclassified`, `unresolved`, or `unlinked_legacy` with a warning. An invented
