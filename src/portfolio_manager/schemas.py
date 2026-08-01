@@ -688,6 +688,21 @@ class JournalEventRead(ApiModel):
             "True when a migrated legacy trade or cash row had no provable settlement counterpart."
         )
     )
+    flow_classification: FlowClassification = Field(
+        description=(
+            "Whether this event moved investor capital across the portfolio boundary (external) "
+            "or was portfolio activity (internal). Derived from the event type unless a person "
+            "ruled otherwise, in which case `flow_is_manual` is true."
+        )
+    )
+    flow_is_manual: bool = Field(
+        default=False,
+        description=(
+            "True when the classification comes from a recorded human ruling rather than the "
+            "event type. Migrated rows often need one, because the pre-journal model could not "
+            "distinguish a trade settlement from a deposit."
+        ),
+    )
     created_at: datetime
 
 

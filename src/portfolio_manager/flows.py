@@ -60,7 +60,7 @@ def resolve_flow(session: Session, event: JournalEvent) -> FlowClassification:
     override = _active_override(session, event.id)
     if override is not None:
         return FlowClassification(override.classification)
-    return _derived(event)
+    return derived_flow(event)
 
 
 def resolve_flows(session: Session, event_ids: list[str]) -> dict[str, FlowClassification]:
@@ -241,7 +241,7 @@ def _suggest_one(
         event_type=event.event_type,
         source_reference=event.source_reference,
         cash_delta=cash_delta,
-        current=_derived(event),
+        current=derived_flow(event),
         suggested=suggested,
         confidence=confidence,
         evidence=evidence,
@@ -294,7 +294,8 @@ def _active_override(session: Session, event_id: str) -> EventFlowClassification
     )
 
 
-def _derived(event: JournalEvent) -> FlowClassification:
+def derived_flow(event: JournalEvent) -> FlowClassification:
+    """The classification implied by the event type, before any ruling is applied."""
     try:
         return classify_flow(EventType(event.event_type))
     except ValueError:

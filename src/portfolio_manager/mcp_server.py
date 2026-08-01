@@ -786,6 +786,16 @@ async def create_portfolio_group(
 
 
 @mcp.tool()
+async def list_portfolio_groups() -> dict[str, Any]:
+    """List the portfolio groups that exist, with their reporting currency and members.
+
+    Use this to find a group ID before calling `get_consolidated_summary`, rather than asking
+    the user to supply one.
+    """
+    return await _request("GET", "/api/v1/portfolio-groups")
+
+
+@mcp.tool()
 async def get_portfolio_group(group_id: str) -> dict[str, Any]:
     """Read a group's name, reporting currency, and current members."""
     return await _request("GET", f"/api/v1/portfolio-groups/{group_id}")

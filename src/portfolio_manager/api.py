@@ -26,6 +26,7 @@ from .corporate_actions import (
 )
 from .db import get_session
 from .errors import DomainError
+from .flows import derived_flow, resolve_flows
 from .identity import (
     build_instrument_profile,
     map_issuer,
@@ -33,7 +34,7 @@ from .identity import (
     set_classification_override,
 )
 from .market import HistoryAdjustment, HistoryInterval, MarketProvider, YahooMarketProvider
-from .models import CashTransaction, Portfolio, Trade
+from .models import CashTransaction, Portfolio, PortfolioGroup, Trade
 from .performance import (
     TWR_METHOD_DESCRIPTION,
     XIRR_METHOD_DESCRIPTION,
@@ -1029,8 +1030,11 @@ def read_journal_events(
         offset=offset,
         limit=limit,
     )
+    # Resolve the flow classification for the whole page in one query: a human ruling outranks
+    # the value derived from the event type, and a reader cannot tell them apart without this.
+    overrides = resolve_flows(session, [event.id for event in events])
     return JournalEventPage(
-        items=[JournalEventRead.model_validate(event) for event in events],
+        items=[_journal_event_read(event, overrides.get(event.id)) for event in events],
         total=total,
         offset=offset,
         limit=limit,
@@ -1063,8 +1067,11 @@ def _event_detail_response(
 ) -> JournalEventDetail:
     detail = event_detail(session, portfolio_id, event_id)
     report = detail["balance"]
+    event_row = detail["event"]
     return JournalEventDetail(
-        event=JournalEventRead.model_validate(detail["event"]),
+        event=_journal_event_read(
+            event_row, resolve_flows(session, [event_row.id]).get(event_row.id)
+        ),
         legs=[
             JournalLegRead(
                 leg_type=leg.leg_type.value,
@@ -1700,6 +1707,24 @@ def get_portfolio_performance(
     )
 
 
+def _journal_event_read(event, override) -> JournalEventRead:
+    """A journal event with the flow classification actually in force.
+
+    `override` is the human ruling when one exists. Reporting it separately from the derived
+    value lets a reader see that somebody settled the question rather than the event type
+    having implied it.
+    """
+    return JournalEventRead(
+        **{
+            field: getattr(event, field)
+            for field in JournalEventRead.model_fields
+            if field not in {"flow_classification", "flow_is_manual"}
+        },
+        flow_classification=override or derived_flow(event),
+        flow_is_manual=override is not None,
+    )
+
+
 def _group_payload(session: Session, group) -> GroupRead:
     return GroupRead(
         id=group.id,
@@ -1731,6 +1756,20 @@ def post_portfolio_group(data: GroupCreate, session: SessionDep) -> GroupRead:
     """
     group = create_group(session, data.name, data.reporting_currency, data.portfolio_ids)
     return _group_payload(session, group)
+
+
+@app.get(
+    "/api/v1/portfolio-groups",
+    response_model=list[GroupRead],
+    operation_id="list_portfolio_groups",
+    summary="List every portfolio group",
+    response_description="All groups with their current members",
+    tags=["consolidation"],
+)
+def list_portfolio_groups(session: SessionDep) -> list[GroupRead]:
+    """List the groups that exist, so a client can offer them without knowing an ID."""
+    groups = session.scalars(select(PortfolioGroup).order_by(PortfolioGroup.created_at)).all()
+    return [_group_payload(session, group) for group in groups]
 
 
 @app.get(

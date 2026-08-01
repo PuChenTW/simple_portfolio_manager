@@ -236,3 +236,25 @@ def test_a_ruling_can_be_revised(session, legacy) -> None:
 
     assert resolve_flow(session, settlement) is FlowClassification.EXTERNAL
     assert replay_state(session, legacy, FUTURE).flows.net_external == Decimal("8600")
+
+
+def test_the_journal_api_reports_the_ruling_in_force(harness, session, legacy) -> None:
+    """A ruling nobody can see over the API is a ruling nobody can audit."""
+    settlement = event_by_request(session, legacy, "cash-adjust-to-8600")
+    set_flow_override(
+        session, settlement.id, classification="internal", reason="Same-day settlement."
+    )
+    session.commit()
+
+    page = harness.client.get(f"/api/v1/portfolios/{legacy}/transactions?limit=50").json()
+    rows = {item["id"]: item for item in page["items"]}
+
+    ruled = rows[settlement.id]
+    assert ruled["flow_classification"] == "internal"
+    assert ruled["flow_is_manual"] is True, "the reading came from a person, not the event type"
+
+    deposit = next(
+        item for item in page["items"] if item["source_reference"] == "opening-cash"
+    )
+    assert deposit["flow_classification"] == "external"
+    assert deposit["flow_is_manual"] is False, "derived from the event type"

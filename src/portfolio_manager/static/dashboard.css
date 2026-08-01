@@ -136,3 +136,64 @@ td.number, th.number { text-align: right; font-variant-numeric: tabular-nums; }
   th, td { padding: 13px 18px; }
   .allocation-legend { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 }
+
+/* Tabs ------------------------------------------------------------------- */
+.tabs { display: flex; gap: 4px; margin-bottom: 22px; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.tab { position: relative; padding: 11px 18px; border: 0; border-bottom: 2px solid transparent; color: var(--muted); background: transparent; font-weight: 700; font-size: .92rem; white-space: nowrap; cursor: pointer; }
+.tab:hover { color: var(--ink); }
+.tab--active { color: var(--teal); border-bottom-color: var(--teal); }
+
+.summary-grid--four { grid-template-columns: repeat(4, 1fr); }
+.summary-grid--four .metric--primary { grid-column: span 1; }
+
+/* NAV chart -------------------------------------------------------------- */
+.chart { margin-top: 22px; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart__area { fill: var(--teal); opacity: .1; }
+.chart__line { fill: none; stroke: var(--teal); stroke-width: 2; stroke-linejoin: round; }
+.chart__grid { stroke: var(--line); stroke-width: 1; }
+.chart__axis { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chart__point { fill: var(--surface); stroke: var(--teal); stroke-width: 2; }
+/* A partial snapshot excluded a holding, so the point is not comparable to its neighbours. */
+.chart__point--partial { stroke: var(--warning); fill: var(--warning-soft); }
+.chart__hit { fill: transparent; cursor: pointer; }
+.chart__hit:hover + .chart__point, .chart__hit:focus-visible + .chart__point { r: 5; }
+.chart__tooltip { pointer-events: none; }
+.chart__tooltip rect { fill: var(--navy); rx: 6; }
+.chart__tooltip text { fill: #fff; font-size: 11px; font-variant-numeric: tabular-nums; }
+
+/* Method + provenance ---------------------------------------------------- */
+.method-list { display: grid; gap: 14px; margin: 20px 0 0; }
+.method-list dt { color: var(--muted); font-size: .74rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.method-list dd { margin: 5px 0 0; font-size: .88rem; line-height: 1.55; }
+.method-list code { padding: 1px 5px; border-radius: 4px; background: #eef3f3; font-size: .82rem; }
+
+.badge { display: inline-flex; align-items: center; padding: 3px 8px; border-radius: 999px; font-size: .72rem; font-weight: 700; white-space: nowrap; }
+.badge--provider { color: #37616b; background: var(--teal-soft); }
+.badge--manual { color: #6d4a12; background: var(--warning-soft); }
+.badge--none { color: var(--muted); background: #eef1f2; }
+.badge--external { color: #2b4f7a; background: #e8effa; }
+.badge--internal { color: #37616b; background: var(--teal-soft); }
+.badge--unknown { color: var(--warning); background: var(--warning-soft); }
+
+/* Consolidation ---------------------------------------------------------- */
+.fx-list, .issuer-list { display: grid; gap: 12px; padding: 0; margin: 20px 0 0; list-style: none; }
+.fx-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 14px; padding: 13px 16px; border: 1px solid var(--line); border-radius: 9px; font-size: .87rem; }
+.fx-row__pair { font-weight: 800; letter-spacing: .02em; }
+.fx-row__rate { font-variant-numeric: tabular-nums; font-weight: 700; }
+.fx-row__meta { color: var(--muted); font-size: .8rem; }
+.issuer-row { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 14px; padding: 13px 16px; border: 1px solid var(--line); border-radius: 9px; }
+.issuer-row__name { font-weight: 700; }
+.issuer-row__tickers { color: var(--muted); font-size: .8rem; }
+.issuer-row__value { font-variant-numeric: tabular-nums; font-weight: 700; }
+.unconverted { color: var(--warning); font-size: .8rem; font-weight: 700; }
+
+@media (max-width: 1050px) {
+  .summary-grid--four { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 680px) {
+  .tabs { margin-bottom: 16px; }
+  .tab { padding: 10px 13px; font-size: .86rem; }
+  .summary-grid--four { grid-template-columns: repeat(2, 1fr); }
+}

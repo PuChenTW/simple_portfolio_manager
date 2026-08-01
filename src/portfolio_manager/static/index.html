@@ -37,7 +37,14 @@
 
       <div id="status" class="status" role="status" aria-live="polite"></div>
 
-      <section id="dashboard" class="dashboard" hidden>
+      <nav class="tabs" aria-label="檢視切換">
+        <button class="tab tab--active" type="button" role="tab" aria-selected="true" data-tab="overview">總覽</button>
+        <button class="tab" type="button" role="tab" aria-selected="false" data-tab="performance">歷史績效</button>
+        <button class="tab" type="button" role="tab" aria-selected="false" data-tab="quality">資料品質</button>
+        <button class="tab" type="button" role="tab" aria-selected="false" data-tab="consolidated">跨帳戶合併</button>
+      </nav>
+
+      <section id="dashboard" class="dashboard" data-panel="overview" hidden>
         <section class="summary-grid" aria-label="投資組合摘要">
           <article class="metric metric--primary">
             <p>總資產</p>
@@ -115,6 +122,214 @@
             </table>
           </div>
         </section>
+      </section>
+
+      <section id="performance" class="dashboard" data-panel="performance" hidden>
+        <section class="summary-grid summary-grid--four" aria-label="績效摘要">
+          <article class="metric metric--primary">
+            <p>期末淨值</p>
+            <strong id="perf-ending">—</strong>
+            <span id="perf-range" class="metric__detail">—</span>
+          </article>
+          <article class="metric">
+            <p>時間加權報酬 TWR</p>
+            <strong id="perf-twr">—</strong>
+            <span class="metric__detail">排除資金進出，用於比較大盤</span>
+          </article>
+          <article class="metric">
+            <p>資金加權報酬 XIRR</p>
+            <strong id="perf-xirr">—</strong>
+            <span id="perf-xirr-detail" class="metric__detail">年化，含投入時點</span>
+          </article>
+          <article class="metric">
+            <p>外部資金淨流入</p>
+            <strong id="perf-flows">—</strong>
+            <span id="perf-flows-detail" class="metric__detail">—</span>
+          </article>
+        </section>
+
+        <section id="perf-coverage" class="warnings" aria-label="績效資料品質" hidden></section>
+
+        <section class="panel" aria-labelledby="nav-title">
+          <div class="panel__heading">
+            <div>
+              <p class="eyebrow">NAV HISTORY</p>
+              <h2 id="nav-title">每日淨值走勢</h2>
+            </div>
+            <span id="nav-caption" class="muted"></span>
+          </div>
+          <div id="nav-chart" class="chart"></div>
+          <div id="nav-empty" class="empty-state" hidden>
+            <p>此區間尚無快照。先執行 <code>portfolio-admin rebuild-snapshots</code> 建立每日估值。</p>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="method-title">
+          <div class="panel__heading">
+            <div>
+              <p class="eyebrow">METHODOLOGY</p>
+              <h2 id="method-title">計算方法</h2>
+            </div>
+            <span id="perf-version" class="muted"></span>
+          </div>
+          <dl id="perf-method" class="method-list"></dl>
+        </section>
+      </section>
+
+      <section id="quality" class="dashboard" data-panel="quality" hidden>
+        <section class="summary-grid summary-grid--four" aria-label="資料品質摘要">
+          <article class="metric">
+            <p>Journal 事件</p>
+            <strong id="q-events">—</strong>
+            <span class="metric__detail">可稽核的原子化紀錄</span>
+          </article>
+          <article class="metric">
+            <p>待裁定現金事件</p>
+            <strong id="q-unruled">—</strong>
+            <span class="metric__detail">影響 TWR / XIRR</span>
+          </article>
+          <article class="metric">
+            <p>已分類標的</p>
+            <strong id="q-classified">—</strong>
+            <span class="metric__detail">asset class 有明確來源</span>
+          </article>
+          <article class="metric">
+            <p>快照覆蓋</p>
+            <strong id="q-coverage">—</strong>
+            <span id="q-coverage-detail" class="metric__detail">—</span>
+          </article>
+        </section>
+
+        <section id="quality-warnings" class="warnings" aria-label="資料品質警示" hidden></section>
+
+        <section class="panel positions-panel" aria-labelledby="class-title">
+          <div class="panel__heading">
+            <div>
+              <p class="eyebrow">CLASSIFICATION</p>
+              <h2 id="class-title">資產分類與來源</h2>
+            </div>
+            <span class="muted">每個欄位都可追溯到來源</span>
+          </div>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">標的</th>
+                  <th scope="col">資產類別</th>
+                  <th scope="col">證券類型</th>
+                  <th scope="col">發行人</th>
+                  <th scope="col">來源</th>
+                </tr>
+              </thead>
+              <tbody id="class-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel positions-panel" aria-labelledby="journal-title">
+          <div class="panel__heading">
+            <div>
+              <p class="eyebrow">JOURNAL</p>
+              <h2 id="journal-title">最近帳務事件</h2>
+            </div>
+            <span id="journal-count" class="muted"></span>
+          </div>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">時間</th>
+                  <th scope="col">類型</th>
+                  <th scope="col">現金流分類</th>
+                  <th scope="col">來源</th>
+                  <th scope="col">狀態</th>
+                </tr>
+              </thead>
+              <tbody id="journal-body"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section id="consolidated" class="dashboard" data-panel="consolidated" hidden>
+        <div id="group-missing" class="empty-state" hidden>
+          <p>尚未建立投資組合群組。</p>
+          <p class="muted">透過 <code>create_portfolio_group</code> 建立後即可看到跨幣別總資產。</p>
+        </div>
+
+        <div id="group-content" hidden>
+          <section class="summary-grid summary-grid--four" aria-label="合併摘要">
+            <article class="metric metric--primary">
+              <p>總資產（換算後）</p>
+              <strong id="c-total">—</strong>
+              <span id="c-currency" class="metric__detail">—</span>
+            </article>
+            <article class="metric">
+              <p>證券市值</p>
+              <strong id="c-securities">—</strong>
+              <span class="metric__detail">不含現金</span>
+            </article>
+            <article class="metric">
+              <p>現金</p>
+              <strong id="c-cash">—</strong>
+              <span id="c-cash-detail" class="metric__detail">—</span>
+            </article>
+            <article class="metric">
+              <p>換算覆蓋率</p>
+              <strong id="c-coverage">—</strong>
+              <span id="c-coverage-detail" class="metric__detail">—</span>
+            </article>
+          </section>
+
+          <section id="c-warnings" class="warnings" aria-label="合併警示" hidden></section>
+
+          <section class="panel" aria-labelledby="fx-title">
+            <div class="panel__heading">
+              <div>
+                <p class="eyebrow">FX RATES USED</p>
+                <h2 id="fx-title">使用的匯率</h2>
+              </div>
+              <span class="muted">每筆換算都可驗證</span>
+            </div>
+            <ul id="fx-list" class="fx-list"></ul>
+          </section>
+
+          <section id="issuer-panel" class="panel" aria-labelledby="issuer-title" hidden>
+            <div class="panel__heading">
+              <div>
+                <p class="eyebrow">ISSUER EXPOSURE</p>
+                <h2 id="issuer-title">發行人曝險</h2>
+              </div>
+              <span class="muted">跨市場合併同一家公司</span>
+            </div>
+            <ul id="issuer-list" class="issuer-list"></ul>
+          </section>
+
+          <section class="panel positions-panel" aria-labelledby="c-positions-title">
+            <div class="panel__heading">
+              <div>
+                <p class="eyebrow">ALL HOLDINGS</p>
+                <h2 id="c-positions-title">全部持倉</h2>
+              </div>
+              <span id="c-positions-count" class="muted"></span>
+            </div>
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">標的</th>
+                    <th scope="col">帳戶</th>
+                    <th scope="col" class="number">數量</th>
+                    <th scope="col" class="number">本地市值</th>
+                    <th scope="col" class="number">換算後</th>
+                    <th scope="col" class="number">權重</th>
+                  </tr>
+                </thead>
+                <tbody id="c-positions-body"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
       </section>
     </main>
   </body>

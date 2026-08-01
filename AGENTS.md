@@ -9,7 +9,9 @@ rules in `services.py`, and Yahoo market-data logic in `market.py`. The MCP serv
 there whenever you add or change an endpoint. SQLite setup and runtime
 configuration belong in `db.py` and `config.py`. Database migrations live under
 `alembic/versions/`; add one whenever persisted models change. Tests live in `tests/`, with fakes
-in `tests/conftest.py`. Docker deployment files are
+in `tests/conftest.py`. The read-only dashboard in `static/` is plain HTML, CSS, and vanilla JS
+with no build step and no external libraries -- the NAV chart is hand-rolled SVG. Verify frontend
+changes with Playwright against the running service, not by inspection. Docker deployment files are
 `Dockerfile` and `compose.yaml`.
 
 Data-transparency modules build on that core. `taxonomy.py` holds the asset-class and
