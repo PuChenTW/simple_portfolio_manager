@@ -206,3 +206,101 @@ async def test_classification_override_error_preserves_api_envelope(mcp_client) 
             reason="typo protection",
         )
     assert excinfo.value.code == "invalid_classification_value"
+
+
+# --- Prompts and resources --------------------------------------------------
+#
+# These carry what no single tool docstring can: the order operations go in, and the vocabulary
+# a call must use. They are generated from the same enums the API validates against, so these
+# tests exist to catch the two ways that guarantee breaks -- a value that stops being listed,
+# and a workflow step that stops matching the tool it names.
+
+
+async def test_every_prompt_and_resource_is_registered() -> None:
+    prompts = {prompt.name for prompt in await mcp_server.mcp.list_prompts()}
+    assert prompts == {
+        "open_account_with_holdings",
+        "record_daily_activity",
+        "analyze_performance",
+        "audit_data_quality",
+    }
+
+    resources = {str(resource.uri) for resource in await mcp_server.mcp.list_resources()}
+    assert resources == {
+        "portfolio://conventions",
+        "portfolio://taxonomy",
+        "portfolio://portfolios",
+    }
+
+
+async def test_taxonomy_resource_lists_every_accepted_value() -> None:
+    """A vocabulary reference that omits a legal value sends agents to a rejected call."""
+    from portfolio_manager.taxonomy import AssetClass, Provenance, SecurityType
+
+    contents = await mcp_server.mcp.read_resource("portfolio://taxonomy")
+    text = list(contents)[0].content
+
+    for member in (*AssetClass, *SecurityType, *Provenance):
+        assert f"`{member.value}`" in text, f"{member.value} missing from the taxonomy resource"
+
+
+async def test_conventions_resource_documents_every_error_code() -> None:
+    """Agents branch on `code`, so an undocumented code is one they cannot handle."""
+    import re
+    from pathlib import Path
+
+    source = Path(mcp_server.__file__).parent
+    raised = set()
+    for path in source.glob("*.py"):
+        text = path.read_text()
+        raised |= set(re.findall(r'DomainError\(\s*\d+,\s*"([a-z_]+)"', text))
+        raised |= set(re.findall(r'DomainError\(\s*\d+,\s*\n\s*"([a-z_]+)"', text))
+
+    undocumented = raised - set(mcp_server.ERROR_CODES)
+    assert not undocumented, f"error codes missing from portfolio://conventions: {undocumented}"
+
+    contents = await mcp_server.mcp.read_resource("portfolio://conventions")
+    text = list(contents)[0].content
+    for code in mcp_server.ERROR_CODES:
+        assert f"`{code}`" in text
+
+
+async def test_prompts_only_reference_tools_that_exist() -> None:
+    """A workflow naming a removed tool is worse than no workflow: it fails mid-task."""
+    import re
+
+    tools = {tool.name for tool in await mcp_server.mcp.list_tools()}
+    known = tools | {"record_transaction", "reverse_transaction"}
+
+    for prompt in await mcp_server.mcp.list_prompts():
+        rendered = await mcp_server.mcp.get_prompt(prompt.name, {})
+        text = " ".join(message.content.text for message in rendered.messages)
+        # Tool names appear as `name(` in the workflow steps.
+        for name in re.findall(r"`([a-z_]+)\(", text):
+            assert name in known, f"{prompt.name} references unknown tool {name}"
+
+
+async def test_the_opening_balance_prompt_states_the_rule_that_prevents_the_error() -> None:
+    """The prompt exists for one reason: opening cash must cover the holdings' cost.
+
+    An agent that misses this hits `journal_out_of_balance` and may then invent a
+    `settlement_amount` to force the event through, writing a wrong cost basis silently.
+    """
+    rendered = await mcp_server.mcp.get_prompt(
+        "open_account_with_holdings",
+        {"account_name": "Broker", "base_currency": "USD", "opening_date": "2026-01-02"},
+    )
+    text = " ".join(message.content.text for message in rendered.messages)
+
+    assert "transfer_in" in text and "deposit" in text, "must contrast the two cash types"
+    assert "original cost" in text
+    assert "journal_out_of_balance" in text
+    assert "Broker" in text and "USD" in text, "arguments must reach the rendered prompt"
+
+
+async def test_the_inventory_resource_survives_an_unreachable_api(monkeypatch) -> None:
+    """A resource that raises leaves a client with no listing at all; this degrades instead."""
+    monkeypatch.setattr(mcp_server, "_client", None)
+    contents = await mcp_server.mcp.read_resource("portfolio://portfolios")
+    text = list(contents)[0].content
+    assert "Portfolios" in text

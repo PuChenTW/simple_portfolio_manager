@@ -14,7 +14,41 @@ from typing import Any
 import httpx
 from mcp.server.fastmcp import FastMCP
 
+from .taxonomy import (
+    CLASSIFICATION_FIELDS,
+    PROVENANCE_RANK,
+    AssetClass,
+    SecurityType,
+)
+
 DEFAULT_BASE_URL = "http://127.0.0.1:8001"
+
+# Every code the API can return, so an agent can branch on all of them rather than discovering
+# them by hitting each one. Kept beside the tools it documents; `test_mcp_server.py` asserts the
+# list stays complete, since a code that exists but is undocumented is worse than none.
+ERROR_CODES = {
+    "action_not_applicable": "The corporate action does not apply to this holding.",
+    "already_reversed": "The event was reversed already; reversals are not repeatable.",
+    "cannot_reverse_a_reversal": "Reverse the original event, not the reversal of it.",
+    "currency_mismatch": "The instrument is not quoted in the portfolio's base currency.",
+    "empty_group": "A portfolio group needs at least one member.",
+    "empty_journal_event": "A journal event must have at least one leg.",
+    "idempotency_conflict": "The request_id was reused with different data.",
+    "insufficient_cash": "The withdrawal or purchase exceeds available cash.",
+    "insufficient_position": "The sale exceeds the quantity currently held.",
+    "invalid_amount": "amount must be positive; direction comes from the transaction type.",
+    "invalid_classification_value": "Not a member of the taxonomy; see portfolio://taxonomy.",
+    "invalid_date_range": "start_date is after end_date, or the range is unusable.",
+    "invalid_tag": "The tag is empty or longer than 50 characters.",
+    "journal_out_of_balance": "The legs do not net to zero; a position cannot come from nothing.",
+    "market_data_unavailable": "No usable quote or history exists, cached or live.",
+    "missing_field": "A field this transaction type requires was omitted.",
+    "portfolio_name_exists": "Another portfolio already uses that name.",
+    "unknown_classification_field": "Not a classifiable field; see portfolio://taxonomy.",
+    "unsupported_event_type": "That event type cannot be recorded this way.",
+    "validation_error": "The request body failed schema validation.",
+    "valuation_date_in_future": "A portfolio cannot be valued on a date that has not happened.",
+}
 
 # Passed to the FastMCP lifespan so the shared client lives exactly as long as the server.
 _client: httpx.AsyncClient | None = None
@@ -777,6 +811,335 @@ async def get_consolidated_summary(
     return await _request(
         "GET", f"/api/v1/portfolio-groups/{group_id}/summary", params=params
     )
+
+
+# --- Resources --------------------------------------------------------------
+#
+# Tools describe one operation each. These describe the things an agent must know *before*
+# choosing a tool -- the legal vocabulary, the conventions, and what already exists -- which no
+# single tool docstring is the right place for.
+
+
+@mcp.resource(
+    "portfolio://conventions",
+    name="portfolio_conventions",
+    title="Conventions and invariants",
+    description="Ticker formats, decimal handling, idempotency, and the full error-code list.",
+    mime_type="text/markdown",
+)
+def conventions_resource() -> str:
+    """The rules that govern every call, gathered in one place."""
+    codes = "\n".join(f"- `{code}` — {text}" for code, text in sorted(ERROR_CODES.items()))
+    return f"""# Portfolio Manager conventions
+
+## Recording activity
+
+`record_transaction` is the only way to record activity. It posts the security, cash, fee, and
+tax legs of one event together or not at all, so a position can never move without the cash that
+paid for it. Correct a posted event with `reverse_transaction`, which writes an opposing event;
+posted events are never edited or deleted.
+
+Transaction types: `buy`, `sell`, `deposit`, `withdrawal`, `transfer_in`, `transfer_out`,
+`dividend`, `interest`, `fee`, `tax`.
+
+`amount` is always a positive magnitude — direction comes from the type, so a withdrawal takes a
+positive amount. `quantity` and `unit_price` are required for `buy` and `sell`. Income is recorded
+gross, with withholding in `tax`.
+
+## Tickers and currency
+
+`AAPL` (US), `2330.TW` (TWSE), `8069.TWO` (TPEX), `BTC-USD` (crypto).
+
+Each portfolio has exactly one `base_currency` and rejects any instrument quoted in another, with
+`currency_mismatch`. Hold USD and TWD assets in separate portfolios, then group them with
+`create_portfolio_group` for a combined view.
+
+## Numbers and time
+
+Send every financial value as a decimal string (`"10.5"`, not `10.5`); responses return decimals
+as strings too. Binary floats are never used in accounting paths. Timestamps are UTC RFC 3339.
+Omitted event times default to server time — pass `occurred_at` explicitly when recording history.
+
+## Idempotency
+
+Every mutation needs a client-generated `request_id`. Retrying the identical payload with the same
+ID is safe and returns the original result. Reusing an ID with different data returns
+`idempotency_conflict`.
+
+## Reading a result honestly
+
+This service reports what it cannot determine rather than filling it in. Before using a number,
+check the disclosure that comes with it:
+
+- `status` on a snapshot — `partial` means a holding had no price that day and is excluded from
+  `securities_value`, carried at cost in `unpriced_market_value`.
+- `coverage.is_reliable` on performance — false when the series has gaps, partial valuations, or
+  an event whose cash flow could not be classified.
+- `converted_value_coverage_percent` and `unconverted` on a consolidated summary — an unresolvable
+  currency pair is left out of the total rather than converted at a guess.
+- `stale`, `provider_as_of`, and `warnings` on a quote.
+
+## Error codes
+
+Errors return `{{code, message, details}}`. Branch on `code`, never on message text.
+
+{codes}
+"""
+
+
+@mcp.resource(
+    "portfolio://taxonomy",
+    name="portfolio_taxonomy",
+    title="Classification vocabulary",
+    description="Legal asset_class, security_type, and provenance values with their precedence.",
+    mime_type="text/markdown",
+)
+def taxonomy_resource() -> str:
+    """The only accepted classification values, so an override never has to be guessed."""
+    asset_classes = "\n".join(f"- `{item.value}`" for item in AssetClass)
+    security_types = "\n".join(f"- `{item.value}`" for item in SecurityType)
+    ranked = sorted(PROVENANCE_RANK.items(), key=lambda pair: pair[1], reverse=True)
+    provenance = "\n".join(
+        f"{position}. `{item.value}`" for position, (item, _) in enumerate(ranked, start=1)
+    )
+    fields = ", ".join(f"`{name}`" for name in sorted(CLASSIFICATION_FIELDS))
+    return f"""# Classification vocabulary
+
+`set_instrument_classification_override` rejects any value outside these lists with
+`invalid_classification_value`. Fields: {fields}.
+
+## Two independent axes
+
+`asset_class` is the economic exposure a holding carries. `security_type` is its legal or
+structural wrapper. They are deliberately separate: GLD is a `commodity_trust` carrying
+`commodity` exposure, and a stablecoin is a `crypto_asset` that behaves as a `cash_equivalent`.
+Collapsing them is what makes a provider report an ETF as common stock.
+
+## asset_class
+
+{asset_classes}
+
+## security_type
+
+{security_types}
+
+## Provenance, highest rank first
+
+{provenance}
+
+A higher-ranked source wins without erasing the lower one, so retracting a manual override
+restores the provider's original value. A symbol that cannot be resolved stays `unclassified`
+rather than being guessed from its spelling — the gap stays visible to everything downstream.
+
+Funds are the common case needing a human: naming a fund's underlying exposure requires a
+verified mapping, so ETFs frequently arrive with `security_type` known and `asset_class`
+`unclassified`. That is a real gap, not an error.
+"""
+
+
+@mcp.resource(
+    "portfolio://portfolios",
+    name="portfolio_inventory",
+    title="Existing portfolios and groups",
+    description="Live list of portfolios with their base currency, and any reporting groups.",
+    mime_type="text/markdown",
+)
+async def portfolios_resource() -> str:
+    """What already exists, so a session does not open with discovery calls."""
+    try:
+        portfolios = await _request("GET", "/api/v1/portfolios")
+        groups = await _request("GET", "/api/v1/portfolio-groups")
+    except ApiError as exc:
+        return f"# Portfolios\n\nCould not reach the API: `{exc.code}` — {exc.message}\n"
+    except RuntimeError as exc:
+        # A resource that raises leaves the client with no listing at all. Saying the inventory
+        # is unavailable is more useful than failing the whole read.
+        return f"# Portfolios\n\nInventory unavailable: {exc}\n"
+
+    if not portfolios:
+        lines = ["No portfolios exist yet. Create one with `create_portfolio`."]
+    else:
+        lines = [f"- **{item['name']}** ({item['base_currency']}) — `{item['id']}`"
+                 for item in portfolios]
+
+    group_items = groups.get("items", []) if isinstance(groups, dict) else groups
+    if group_items:
+        lines.append("")
+        lines.append("## Reporting groups")
+        lines += [
+            f"- **{item['name']}** → {item['reporting_currency']} — `{item['id']}`"
+            for item in group_items
+        ]
+
+    return "# Portfolios\n\n" + "\n".join(lines) + "\n"
+
+
+# --- Prompts ----------------------------------------------------------------
+#
+# A prompt carries what the tool list cannot: the order operations go in, and the mistakes that
+# order prevents. Tool docstrings say what one call does; these say how the calls fit together.
+
+
+@mcp.prompt(
+    title="Open an account that already holds cash and stock",
+    description="Correct sequence for recording an existing brokerage account's opening balance.",
+)
+def open_account_with_holdings(
+    account_name: str = "",
+    base_currency: str = "USD",
+    opening_date: str = "",
+) -> str:
+    """Record an existing account without inventing a position or losing its cost basis."""
+    name = account_name or "<account name>"
+    date_hint = opening_date or "<YYYY-MM-DD, the real opening date>"
+    return f"""Set up a portfolio for an account that already holds cash and securities.
+
+Account: {name}
+Base currency: {base_currency}
+Opening date: {date_hint}
+
+The journal will not let a position appear from nothing — a `buy` whose legs do not balance is
+rejected with `journal_out_of_balance`. So the opening cash must include what the holdings
+originally cost, and each holding is then bought back out of it.
+
+Follow this order:
+
+1. `create_portfolio(name={name!r}, base_currency={base_currency!r})` and keep the returned id.
+
+2. One `record_transaction` with `transaction_type="transfer_in"`, where `amount` is
+   **the cash balance plus the total original cost of every holding**, and `occurred_at` is the
+   opening date.
+
+   Use `transfer_in`, not `deposit`: this money was not contributed today. Recording it as a
+   deposit tells XIRR that fresh capital arrived on the opening date and distorts the return.
+
+3. One `record_transaction` with `transaction_type="buy"` per holding, using the price actually
+   paid and the same `occurred_at`.
+
+   Use the original cost, never today's market price. Valuing an opening position at market
+   resets its unrealized gain to zero and erases a gain the investor really has.
+
+4. `get_portfolio_summary` to confirm cash matches the real balance and each position shows its
+   true average cost.
+
+Before starting, ask me for anything you do not have: the cash balance, and each holding's
+ticker, quantity, and original unit cost. If a cost basis is genuinely unknown, say so and record
+it in the transaction `memo` rather than substituting a plausible number — a guessed basis is
+indistinguishable from a real one once written, and every P&L figure inherits the error.
+
+If the account has full transaction history and I want returns measured across all of it, tell me
+that this opening-balance approach starts the series at the opening date, and that the
+alternative is recording each historical transaction in date order instead.
+"""
+
+
+@mcp.prompt(
+    title="Record trading activity",
+    description="Record buys, sells, dividends, and cash movements with correct settlement.",
+)
+def record_daily_activity(activity: str = "") -> str:
+    """Turn a broker statement or a described trade into balanced journal events."""
+    described = activity or "<paste the trades, dividends, or cash movements>"
+    return f"""Record this activity in the portfolio:
+
+{described}
+
+Use `record_transaction` for every item — it is the only write path, and it posts the position
+and its settlement cash in one transaction so the two can never disagree.
+
+Rules that decide the details:
+
+- Direction comes from `transaction_type`, so `amount` is always positive. A withdrawal takes a
+  positive amount.
+- Trade `fee` and `tax` capitalize into cost basis on a buy and net against proceeds on a sell.
+  Pass them as their own fields rather than adjusting `unit_price`.
+- Dividends are recorded gross, with withholding in `tax`. Never record the net figure alone: the
+  tax is unrecoverable once collapsed into the amount, and income must stay distinguishable from
+  an investor contribution or TWR will treat it as new capital.
+- `unit_price` is the actual execution price, not a market quote.
+- If the broker reports an exact settlement figure that differs from quantity x price +/- costs,
+  pass it as `settlement_amount`; the event must still balance.
+- Give every item its own `request_id` and set `occurred_at` to when it actually happened.
+
+Report what you recorded, and call out anything you could not: an ambiguous line is worth one
+question, and a guessed one silently corrupts the ledger.
+"""
+
+
+@mcp.prompt(
+    title="Measure performance over a period",
+    description="Build the snapshots a return needs, then read TWR and XIRR with their coverage.",
+)
+def analyze_performance(
+    portfolio_id: str = "",
+    start_date: str = "",
+    end_date: str = "",
+) -> str:
+    """Measure return correctly, including whether the underlying data supports the number."""
+    target = portfolio_id or "<portfolio id, or ask me which portfolio>"
+    return f"""Measure performance for portfolio {target} from {start_date or "<start>"} to
+{end_date or "<end>"}.
+
+Returns are computed from stored daily snapshots, so build them first:
+
+1. `rebuild_valuation_snapshots(portfolio_id, start_date, end_date)`. Safe to re-run — dates that
+   already have a snapshot are skipped.
+2. `get_portfolio_performance(portfolio_id, start_date, end_date)`.
+
+Then report both returns, because they answer different questions:
+
+- `twr_percent` removes the effect of deposits and withdrawals, so it measures the holdings. This
+  is the figure to compare against a benchmark.
+- `xirr_percent` keeps that effect, so it measures what the investor earned on the capital
+  actually at risk.
+
+Neither is `total_pnl / cost_basis`, which is not a return and should not be presented as one.
+
+Read `coverage` before quoting either number, and state what it says:
+
+- `is_reliable: false` means the figures are computable but biased. Say so alongside them rather
+  than presenting them as settled.
+- `missing_dates` are gaps the linked return jumps across; they can be filled by rebuilding.
+- `partial_snapshots` are days where a holding had no price and was excluded from the total.
+- `unclassified_flow_events` are events whose cash sits in neither the capital base nor the
+  return.
+
+A return quoted without its coverage is the failure this service is built to prevent.
+"""
+
+
+@mcp.prompt(
+    title="Audit data quality",
+    description="Find the gaps this service reports rather than fills, and what can be fixed.",
+)
+def audit_data_quality(portfolio_id: str = "") -> str:
+    """Survey what is unresolved, separating what a person can fix from what is inherent."""
+    target = portfolio_id or "every portfolio from `list_portfolios`"
+    return f"""Audit the data quality of {target} and report what is unresolved.
+
+Gather:
+
+1. `get_portfolio_summary` — check `warnings` and any position with `price_stale: true`.
+2. `get_instrument_profile` for each holding — note every field whose `provenance` is
+   `unclassified`, and read `portfolio://taxonomy` for the values an override may use.
+3. `get_nav_history` — note `missing_dates` and any snapshot with `status: partial`.
+4. `get_consolidated_summary` if the portfolios are grouped — check
+   `converted_value_coverage_percent` and `unconverted`.
+
+Then separate the findings into two lists, because they call for different responses:
+
+- **Actionable**: gaps a person can close. An ETF whose `asset_class` is `unclassified` can be
+  set with `set_instrument_classification_override` once its exposure is verified. Missing
+  snapshot dates can be built with `rebuild_valuation_snapshots`.
+- **Inherent**: facts about the data that no work will change, such as an instrument the provider
+  has never priced. Report these once, plainly, and do not present them as tasks.
+
+Keeping them apart is the point. A warning nobody can ever clear teaches people to ignore the
+warnings that matter.
+
+Do not propose a classification you cannot justify from a source. `unclassified` is a correct
+answer; an invented one is indistinguishable from a verified one once stored.
+"""
 
 
 def main() -> None:

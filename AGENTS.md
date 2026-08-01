@@ -6,7 +6,10 @@ Application code lives in `src/portfolio_manager/`. Keep HTTP routing and OpenAP
 `api.py`, request/response contracts in `schemas.py`, database tables in `models.py`, portfolio
 rules in `services.py`, and Yahoo market-data logic in `market.py`. The MCP server in
 `mcp_server.py` is a thin HTTP client that wraps each API endpoint as a tool; add a matching tool
-there whenever you add or change an endpoint. SQLite setup and runtime
+there whenever you add or change an endpoint. That module also holds the MCP prompts and
+resources: prompts carry multi-step workflows and the mistakes their ordering prevents, resources
+carry the vocabulary and conventions a call needs before any tool is chosen. Generate a resource
+from the enum it documents rather than restating it, so the two cannot drift. SQLite setup and runtime
 configuration belong in `db.py` and `config.py`. Database migrations live under
 `alembic/versions/`; add one whenever persisted models change. Tests live in `tests/`, with fakes
 in `tests/conftest.py`. The read-only dashboard in `static/` is plain HTML, CSS, and vanilla JS
@@ -69,7 +72,10 @@ disagree. `record_transaction` is now the only write path. `test_migrations.py` 
 the migrated schema matches the ORM models, since the test harness builds tables from the ORM
 while production runs Alembic. `test_mcp_server.py` asserts every API operation has a matching
 MCP tool, so adding an endpoint without its tool fails the suite rather than shipping a surface
-agents cannot reach.
+agents cannot reach. It also asserts that `portfolio://taxonomy` lists every enum member, that
+`portfolio://conventions` documents every `DomainError` code raised anywhere in the package, and
+that no prompt names a tool that does not exist -- a workflow referencing a removed tool fails
+mid-task, which is worse than having no workflow at all.
 
 A warning nobody can ever clear is worse than no warning: it teaches readers to ignore the ones
 that matter. Before reporting a gap, check whether the user can actually act on it, and whether it

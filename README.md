@@ -271,6 +271,29 @@ get_consolidated_summary(group_id=...)
 get_instrument_profile(reference="TSM")
 ```
 
+### Prompts and resources
+
+Tools describe one operation each, which leaves two things unsaid: the order operations go in,
+and the vocabulary a call must use. Four prompts and three resources carry that.
+
+| Prompt | What it prevents |
+| --- | --- |
+| `open_account_with_holdings` | Opening cash must cover the holdings' cost, or the balanced journal rejects the purchase. Nothing in the tool list implies this. |
+| `record_daily_activity` | Gross-vs-net dividends, capitalized fees, and positive-magnitude amounts. |
+| `analyze_performance` | Snapshots must exist before a return can be measured, and `coverage` must be read with it. |
+| `audit_data_quality` | Separates gaps a person can close from facts that no work will change. |
+
+| Resource | Contents |
+| --- | --- |
+| `portfolio://conventions` | Tickers, decimals, idempotency, and every error code. |
+| `portfolio://taxonomy` | Legal `asset_class` and `security_type` values with provenance ranking. |
+| `portfolio://portfolios` | Live inventory of portfolios and groups, so a session skips discovery. |
+
+The taxonomy and error-code lists are generated from the same enums the API validates against, and
+tests fail if either drifts. Prompt support varies by client; Claude Desktop surfaces prompts as
+slash commands, and clients without prompt support still get the same rules from the OpenAPI
+description.
+
 ## Quality checks
 
 ```bash
