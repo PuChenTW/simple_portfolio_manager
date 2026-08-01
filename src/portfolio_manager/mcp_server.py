@@ -721,6 +721,47 @@ async def get_nav_history(
     )
 
 
+@mcp.tool()
+async def get_portfolio_performance(
+    portfolio_id: str,
+    start_date: str,
+    end_date: str,
+    include_daily: bool = False,
+) -> dict[str, Any]:
+    """Measure how a portfolio performed between two dates.
+
+    Dates are `YYYY-MM-DD` and inclusive. Two returns come back because they answer different
+    questions, and quoting one for the other is a real error:
+
+    - `twr_percent` (time-weighted) removes the effect of deposits and withdrawals, so it
+      reflects how the holdings did. This is the figure to compare against a benchmark or
+      another portfolio.
+    - `xirr_percent` (money-weighted) keeps that effect, so it reflects what the investor
+      earned on the capital actually at risk. A large deposit landing before a rally lifts XIRR
+      above TWR; neither number is wrong.
+
+    Neither is `total_pnl / cost_basis`, which is not a return and should never be described as
+    one.
+
+    This reads stored snapshots rather than building them: both ends of the period need one, and
+    gaps in between appear in `coverage.missing_dates`. Call `rebuild_valuation_snapshots` first
+    if the series is incomplete.
+
+    Check `coverage.is_reliable` before quoting any figure. When it is false -- gaps, partial
+    snapshots, or migrated cash events still awaiting a ruling -- the numbers are computable but
+    biased, and the reason is in `coverage.warnings`. Report the caveat alongside the number
+    rather than presenting it as settled.
+    """
+    params = {
+        "start_date": start_date,
+        "end_date": end_date,
+        "include_daily": include_daily,
+    }
+    return await _request(
+        "GET", f"/api/v1/portfolios/{portfolio_id}/performance", params=params
+    )
+
+
 def main() -> None:
     transport = os.getenv("PORTFOLIO_MCP_TRANSPORT", "stdio")
     if transport == "streamable-http":

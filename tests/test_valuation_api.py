@@ -185,3 +185,44 @@ def test_every_valuation_route_has_an_mcp_tool(harness) -> None:
     }
     tools = {tool.name for tool in asyncio.run(mcp.list_tools())}
     assert valuation_ops <= tools, f"endpoints without a tool: {sorted(valuation_ops - tools)}"
+
+
+def test_performance_round_trip_over_http(harness, held) -> None:
+    start = TODAY - timedelta(days=2)
+    harness.client.post(
+        f"/api/v1/portfolios/{held}/valuation-snapshots/rebuild",
+        json={"start_date": start.isoformat(), "end_date": TODAY.isoformat()},
+    )
+
+    body = harness.client.get(
+        f"/api/v1/portfolios/{held}/performance",
+        params={"start_date": start.isoformat(), "end_date": TODAY.isoformat()},
+    ).json()
+
+    assert body["twr_method"] == "modified-dietz-daily-v1"
+    assert body["twr_method_description"], "the convention must travel with the number"
+    assert body["xirr_method_description"]
+    assert "is_reliable" in body["coverage"]
+    assert isinstance(body["beginning_value"], str), "decimals cross the boundary as strings"
+
+
+def test_performance_reports_why_it_cannot_be_measured(harness, held) -> None:
+    """A period without two snapshots returns nulls and a reason, not a zero return."""
+    body = harness.client.get(
+        f"/api/v1/portfolios/{held}/performance",
+        params={"start_date": YESTERDAY.isoformat(), "end_date": TODAY.isoformat()},
+    ).json()
+
+    assert body["twr_percent"] is None
+    assert body["xirr_percent"] is None
+    assert body["xirr_unavailable_reason"]
+    assert body["coverage"]["is_reliable"] is False
+
+
+def test_performance_rejects_an_inverted_range(harness, held) -> None:
+    response = harness.client.get(
+        f"/api/v1/portfolios/{held}/performance",
+        params={"start_date": TODAY.isoformat(), "end_date": YESTERDAY.isoformat()},
+    )
+    assert response.status_code == 422
+    assert response.json()["code"] == "invalid_date_range"

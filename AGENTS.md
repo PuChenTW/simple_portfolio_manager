@@ -26,7 +26,9 @@ with history bounded by the valuation date and stores it as a snapshot, plus the
 range rebuild behind `portfolio-admin rebuild-snapshots`. `flows.py` holds manual rulings on
 whether a migrated cash movement was investor capital or portfolio activity; the pre-journal
 model could not distinguish them, and replay reads an active ruling in place of the value
-derived from the event type.
+derived from the event type. `performance.py` computes TWR and XIRR from stored snapshots and
+journal flows, and reports the coverage behind them: only unruled *cash* events bias a return,
+so migrated trades (which carry no cash leg) are counted separately and do not raise an alarm.
 
 ## Build, Test, and Development Commands
 

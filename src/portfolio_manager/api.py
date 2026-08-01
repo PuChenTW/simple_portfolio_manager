@@ -27,6 +27,11 @@ from .identity import (
 )
 from .market import HistoryAdjustment, HistoryInterval, MarketProvider, YahooMarketProvider
 from .models import CashTransaction, Portfolio, Trade
+from .performance import (
+    TWR_METHOD_DESCRIPTION,
+    XIRR_METHOD_DESCRIPTION,
+    calculate_performance,
+)
 from .postings import (
     TransactionRequest,
     event_detail,
@@ -46,6 +51,7 @@ from .schemas import (
     CorporateActionPage,
     CorporateActionPreview,
     CorporateActionRead,
+    DailyReturnRead,
     ErrorResponse,
     HealthRead,
     HistoryBarRead,
@@ -58,6 +64,8 @@ from .schemas import (
     JournalLegRead,
     MarketInstrumentRead,
     NavHistoryRead,
+    PerformanceCoverageRead,
+    PerformanceRead,
     PortfolioCreate,
     PortfolioRead,
     PortfolioSummary,
@@ -1580,4 +1588,81 @@ def get_nav_history(
         missing_dates=absent,
         partial_snapshots=len(partial),
         warnings=warnings,
+    )
+
+
+@app.get(
+    "/api/v1/portfolios/{portfolio_id}/performance",
+    response_model=PerformanceRead,
+    operation_id="get_portfolio_performance",
+    summary="Measure return over a period",
+    response_description="TWR, XIRR, flow breakdown, method, and data coverage",
+    tags=["valuation"],
+)
+def get_portfolio_performance(
+    portfolio_id: PortfolioId,
+    session: SessionDep,
+    start_date: Annotated[date, Query(description="First valuation date, inclusive.")],
+    end_date: Annotated[date, Query(description="Last valuation date, inclusive.")],
+    include_daily: Annotated[
+        bool, Query(description="Return the per-day series as well as the period totals.")
+    ] = False,
+) -> PerformanceRead:
+    """
+    Measure how a portfolio performed between two dates.
+
+    Two returns are reported because they answer different questions. `twr_percent` removes the
+    effect of money arriving and leaving, so it reflects the holdings and is what you compare
+    against a benchmark. `xirr_percent` keeps that effect, so it reflects what the investor
+    earned on the capital they actually had at risk. A large deposit landing before a rally
+    lifts XIRR above TWR, and neither figure is wrong.
+
+    This reads stored snapshots; it does not build them. Both ends of the period need a
+    snapshot, and gaps in between are reported in `coverage.missing_dates` rather than
+    interpolated. Check `coverage.is_reliable` before quoting a number: it is false when the
+    series has gaps, contains partial snapshots, or the portfolio still has migrated cash events
+    awaiting a ruling, any of which biases the result in a direction this service cannot correct.
+    """
+    result = calculate_performance(
+        session, portfolio_id, start_date, end_date, include_daily=include_daily
+    )
+    return PerformanceRead(
+        portfolio_id=result.portfolio_id,
+        base_currency=result.base_currency,
+        start_date=result.start_date,
+        end_date=result.end_date,
+        beginning_value=result.beginning_value,
+        ending_value=result.ending_value,
+        external_inflows=result.external_inflows,
+        external_outflows=result.external_outflows,
+        income=result.income,
+        fees=result.fees,
+        taxes=result.taxes,
+        twr_percent=result.twr_percent,
+        annualized_twr_percent=result.annualized_twr_percent,
+        xirr_percent=result.xirr_percent,
+        xirr_unavailable_reason=result.xirr_unavailable_reason,
+        twr_method=result.twr_method,
+        twr_method_description=TWR_METHOD_DESCRIPTION,
+        xirr_method=result.xirr_method,
+        xirr_method_description=XIRR_METHOD_DESCRIPTION,
+        calculation_version=result.calculation_version,
+        coverage=PerformanceCoverageRead(
+            snapshots_used=result.coverage.snapshots_used,
+            missing_dates=result.coverage.missing_dates,
+            partial_snapshots=result.coverage.partial_snapshots,
+            unruled_legacy_events=result.coverage.unruled_legacy_events,
+            is_reliable=result.coverage.is_reliable,
+            warnings=result.coverage.warnings,
+        ),
+        daily_returns=[
+            DailyReturnRead(
+                valuation_date=item.valuation_date,
+                beginning_value=item.beginning_value,
+                ending_value=item.ending_value,
+                external_flow=item.external_flow,
+                return_percent=item.return_percent,
+            )
+            for item in result.daily_returns
+        ],
     )

@@ -995,6 +995,75 @@ class RebuildRead(ApiModel):
     warnings: list[str]
 
 
+class DailyReturnRead(ApiModel):
+    """One sub-period of a return series."""
+
+    valuation_date: date
+    beginning_value: Decimal
+    ending_value: Decimal
+    external_flow: Decimal
+    return_percent: Decimal | None = Field(
+        description="Null when the day had no value to measure against, never 0 in its place."
+    )
+
+
+class PerformanceCoverageRead(ApiModel):
+    """Whether the series behind a return is complete enough to rely on."""
+
+    snapshots_used: int
+    missing_dates: list[date]
+    partial_snapshots: int
+    unruled_legacy_events: int
+    is_reliable: bool = Field(
+        description=(
+            "True only when the period has no gaps, no partial snapshots, and no migrated "
+            "events awaiting a ruling. False means the figures are computable but biased."
+        )
+    )
+    warnings: list[str]
+
+
+class PerformanceRead(ApiModel):
+    """Return over a period, with the method and the data quality behind it."""
+
+    portfolio_id: str
+    base_currency: str
+    start_date: date
+    end_date: date
+    beginning_value: Decimal
+    ending_value: Decimal
+    external_inflows: Decimal = Field(description="Investor capital added, excluding income.")
+    external_outflows: Decimal = Field(description="Investor capital withdrawn; negative.")
+    income: Decimal
+    fees: Decimal
+    taxes: Decimal
+    twr_percent: Decimal | None = Field(
+        description=(
+            "Time-weighted return: how the holdings performed, with the effect of money "
+            "arriving and leaving removed. Compare this against a benchmark."
+        )
+    )
+    annualized_twr_percent: Decimal | None = Field(
+        description="Null for periods under 30 days, where annualizing would magnify noise."
+    )
+    xirr_percent: Decimal | None = Field(
+        description=(
+            "Money-weighted return: what the investor earned on the capital they had at risk, "
+            "so the timing of contributions moves it. Null when no rate solves the flows."
+        )
+    )
+    xirr_unavailable_reason: str | None = Field(
+        description="Why XIRR is null, when it is. Never an opaque failure."
+    )
+    twr_method: str
+    twr_method_description: str
+    xirr_method: str
+    xirr_method_description: str
+    calculation_version: str
+    coverage: PerformanceCoverageRead
+    daily_returns: list[DailyReturnRead]
+
+
 class ErrorResponse(ApiModel):
     """Stable machine-readable error envelope used for validation and domain failures."""
 

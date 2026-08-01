@@ -78,11 +78,21 @@ class ReplayCoverage:
     """How much of the replayed state rests on a complete record."""
 
     events_applied: int = 0
-    unlinked_legacy_events: int = 0
+    # Migrated cash movements nobody has ruled on yet. These bias a return, because one that is
+    # really a trade settlement is being counted as investor capital.
+    unruled_cash_events: int = 0
+    # Migrated trades, which carry no cash leg. Their settlement was never recorded and cannot be
+    # recovered, but they move no money, so they cannot skew a flow-based measure.
+    unlinked_legacy_trades: int = 0
     # Migrated events a person has since ruled on; no longer a gap, but still worth reporting.
     reclassified_legacy_events: int = 0
     unknown_flow_events: int = 0
     warnings: list[str] = field(default_factory=list)
+
+    @property
+    def unlinked_legacy_events(self) -> int:
+        """Every migrated event still carrying an unrecoverable gap, of either kind."""
+        return self.unruled_cash_events + self.unlinked_legacy_trades
 
     @property
     def is_complete(self) -> bool:
@@ -125,10 +135,16 @@ def replay_state(
 
     for event, legs in events:
         coverage.events_applied += 1
-        if event.is_unlinked_legacy and event.id not in overrides:
-            coverage.unlinked_legacy_events += 1
-        elif event.is_unlinked_legacy:
-            coverage.reclassified_legacy_events += 1
+        if event.is_unlinked_legacy:
+            # Only an event that moves cash can be misclassified in a way that skews a return.
+            # A migrated trade carries no cash leg, so it has no flow to rule on; counting it as
+            # an open question would raise an alarm nobody can ever clear.
+            if event.id in overrides:
+                coverage.reclassified_legacy_events += 1
+            elif any(leg.leg_type == LegType.CASH.value for leg in legs):
+                coverage.unruled_cash_events += 1
+            else:
+                coverage.unlinked_legacy_trades += 1
 
         # SQLite hands back naive datetimes even for timezone-aware columns.
         in_window = since is None or _aware(event.occurred_at) >= _aware(since)
@@ -294,11 +310,17 @@ def _describe_gaps(coverage: ReplayCoverage) -> None:
             "rather than derived from their event type; see the flow-classification overrides "
             "for the reason recorded against each"
         )
-    if coverage.unlinked_legacy_events:
+    if coverage.unruled_cash_events:
         coverage.warnings.append(
-            f"{coverage.unlinked_legacy_events} migrated legacy events carry no settlement "
-            "linkage, so replayed cash does not reflect the trades that consumed it; the "
-            "linkage was never recorded and has not been inferred"
+            f"{coverage.unruled_cash_events} migrated cash movements have no ruling on whether "
+            "they crossed the portfolio boundary; any that actually settled a trade is being "
+            "counted as investor capital, which skews flow-based measures"
+        )
+    if coverage.unlinked_legacy_trades:
+        coverage.warnings.append(
+            f"{coverage.unlinked_legacy_trades} migrated trades carry no settlement linkage, so "
+            "replayed cash does not reflect the money they consumed; the linkage was never "
+            "recorded and has not been inferred. They move no cash, so they do not bias returns"
         )
     if coverage.unknown_flow_events:
         coverage.warnings.append(
