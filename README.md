@@ -53,13 +53,8 @@ curl -X POST http://127.0.0.1:8001/api/v1/portfolios/PORTFOLIO_ID/transactions \
 ```
 
 `record_transaction` posts the security, cash, fee, and tax legs in one database transaction, so
-a position can never move without its settlement. Prefer it for anything that moves cash and a
-position together.
-
-The older `record_trade` and `record_cash_transaction` remain as independent ledgers with
-unchanged semantics: a buy recorded through `record_trade` does **not** deduct cash. They are
-retained for compatibility with data recorded before the journal existed; new work should not
-use them.
+a position can never move without its settlement. It is the only way to record activity, and a
+posted event is corrected by `reverse_transaction`, never edited or deleted.
 
 Read the full valuation at `/api/v1/portfolios/PORTFOLIO_ID/summary`. Prices, quantities,
 and amounts are JSON decimal strings. All timestamps are UTC RFC 3339 values.
@@ -88,24 +83,33 @@ benchmark. `xirr_percent` keeps that effect, so it measures what the investor ea
 capital actually at risk. Neither is `total_pnl / cost_basis`, which is not a return.
 
 Check `coverage.is_reliable` before quoting either. It is false when the snapshot series has
-gaps, contains partial valuations, or the portfolio still holds migrated cash events awaiting a
-ruling — each biases the result in a direction the service cannot correct.
+gaps, contains partial valuations, or holds an event whose cash flow could not be classified —
+each biases the result in a direction the service cannot correct.
 
-### Legacy cash that predates the journal
+### Opening an account that already holds cash and stock
 
-The pre-journal model recorded trades and cash as separate ledgers, so a cash row could be a
-trade settlement or an investor deposit and nothing distinguishes them. Migrating guesses
-nothing; it marks such rows for review:
+A position cannot appear from nothing: the journal rejects a purchase whose legs do not balance,
+so recording an existing holding needs the cash it was bought with. Transfer in the cash **plus
+the cost basis of the holdings**, then buy each holding at its original cost.
 
 ```bash
-uv run portfolio-admin backfill-journal
-uv run portfolio-admin review-flows PORTFOLIO_ID
-uv run portfolio-admin set-flow EVENT_ID internal --reason "Settles the same-day purchase"
+# 1. Opening cash (50,000) plus what the shares originally cost (15,000).
+curl -X POST http://127.0.0.1:8001/api/v1/portfolios/PORTFOLIO_ID/transactions \
+  -H 'content-type: application/json' \
+  -d '{"request_id":"open-cash-1","transaction_type":"transfer_in","amount":"65000",
+       "occurred_at":"2026-01-02T00:00:00Z","memo":"Opening balance"}'
+
+# 2. Each existing holding, at the price actually paid.
+curl -X POST http://127.0.0.1:8001/api/v1/portfolios/PORTFOLIO_ID/transactions \
+  -H 'content-type: application/json' \
+  -d '{"request_id":"open-aapl-1","transaction_type":"buy","ticker":"AAPL",
+       "quantity":"100","unit_price":"150","occurred_at":"2026-01-02T00:00:00Z"}'
 ```
 
-`review-flows` proposes a classification with its evidence — chiefly whether a day's trades net
-to that day's cash movement — but never applies one. A ruling is recorded beside the event
-rather than editing it, and `--retract` restores the derived value.
+Use `transfer_in` rather than `deposit`: the money is not new capital contributed today, and
+XIRR would otherwise report it as such. Use the original cost rather than today's price — valuing
+an opening position at market erases the gain it already holds. Set `occurred_at` to the real
+opening date, since that is where the NAV series and every return measurement start.
 
 ## Consolidating across currencies
 
@@ -206,7 +210,7 @@ When wrapping the API as a skill, preserve these core instructions from the Open
 An MCP server exposes every API operation as a tool for MCP clients such as Hermes and Claude
 Desktop. It is a thin client over the HTTP API, so **the API must be running** (`uv run
 portfolio-manager`) before you start it. Each tool matches an API `operationId` one-to-one
-(`create_portfolio`, `record_trade`, `get_portfolio_summary`, …), and errors preserve the same
+(`create_portfolio`, `record_transaction`, `get_portfolio_summary`, …), and errors preserve the same
 `{code, message, details}` envelope.
 
 Run over stdio (the default, for local clients that launch a subprocess):

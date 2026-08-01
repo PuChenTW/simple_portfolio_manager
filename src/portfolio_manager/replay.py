@@ -10,11 +10,11 @@ yields the same state. Corrections are reversals posted as their own events with
 so folding every event in order cancels a reversed event against its reversal arithmetically --
 no filtering is required, and none is done.
 
-Where the journal is genuinely incomplete, this module says so. Legacy trades migrated by
-`backfill` carry no cash leg, because the original schema never recorded which cash transaction
-settled which trade. Replayed cash therefore overstates reality for those portfolios. That gap is
-reported through `ReplayCoverage` so callers can mark a snapshot partial, and it is never closed
-by inference: a guessed settlement is indistinguishable from a recorded one once written.
+Where the journal is genuinely incomplete, this module says so. An event whose cash movement
+cannot be attributed to either investor capital or portfolio activity is counted in
+`ReplayCoverage.unknown_flow_events` and left out of both totals, so callers can mark a snapshot
+partial. That gap is never closed by inference: a guessed classification is indistinguishable
+from a recorded one once written, and it silently biases every return derived from it.
 """
 
 from __future__ import annotations
@@ -27,7 +27,6 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .flows import resolve_flows
 from .journal import EventType, FlowClassification, LegType, classify_flow
 from .models import Instrument, JournalEvent, JournalLeg
 from .services import ZERO, _aware
@@ -78,25 +77,12 @@ class ReplayCoverage:
     """How much of the replayed state rests on a complete record."""
 
     events_applied: int = 0
-    # Migrated cash movements nobody has ruled on yet. These bias a return, because one that is
-    # really a trade settlement is being counted as investor capital.
-    unruled_cash_events: int = 0
-    # Migrated trades, which carry no cash leg. Their settlement was never recorded and cannot be
-    # recovered, but they move no money, so they cannot skew a flow-based measure.
-    unlinked_legacy_trades: int = 0
-    # Migrated events a person has since ruled on; no longer a gap, but still worth reporting.
-    reclassified_legacy_events: int = 0
     unknown_flow_events: int = 0
     warnings: list[str] = field(default_factory=list)
 
     @property
-    def unlinked_legacy_events(self) -> int:
-        """Every migrated event still carrying an unrecoverable gap, of either kind."""
-        return self.unruled_cash_events + self.unlinked_legacy_trades
-
-    @property
     def is_complete(self) -> bool:
-        return self.unlinked_legacy_events == 0 and self.unknown_flow_events == 0
+        return self.unknown_flow_events == 0
 
 
 @dataclass
@@ -125,8 +111,6 @@ def replay_state(
     events = _events_through(session, portfolio_id, cutoff)
     tickers = _ticker_index(session)
     reversed_types = {event.id: event.event_type for event, _ in events}
-    # A human ruling on what a migrated cash movement meant outranks the type-derived guess.
-    overrides = resolve_flows(session, [event.id for event, _ in events])
 
     cash = ZERO
     positions: dict[str, ReplayedPosition] = {}
@@ -135,17 +119,6 @@ def replay_state(
 
     for event, legs in events:
         coverage.events_applied += 1
-        if event.is_unlinked_legacy:
-            # Only an event that moves cash can be misclassified in a way that skews a return.
-            # A migrated trade carries no cash leg, so it has no flow to rule on; counting it as
-            # an open question would raise an alarm nobody can ever clear.
-            if event.id in overrides:
-                coverage.reclassified_legacy_events += 1
-            elif any(leg.leg_type == LegType.CASH.value for leg in legs):
-                coverage.unruled_cash_events += 1
-            else:
-                coverage.unlinked_legacy_trades += 1
-
         # SQLite hands back naive datetimes even for timezone-aware columns.
         in_window = since is None or _aware(event.occurred_at) >= _aware(since)
         cash += _fold_event(
@@ -157,7 +130,6 @@ def replay_state(
             coverage,
             in_window,
             reversed_types,
-            overrides,
         )
 
     _describe_gaps(coverage)
@@ -180,7 +152,6 @@ def _fold_event(
     coverage: ReplayCoverage,
     in_window: bool,
     reversed_types: dict[str, str],
-    overrides: dict[str, FlowClassification],
 ) -> Decimal:
     """Apply one event's legs; returns its net cash delta."""
     cash_delta = ZERO
@@ -191,7 +162,7 @@ def _fold_event(
             cash_delta += leg.amount_delta or ZERO
 
     if in_window:
-        _accumulate_flows(event, legs, cash_delta, flows, coverage, reversed_types, overrides)
+        _accumulate_flows(event, legs, cash_delta, flows, coverage, reversed_types)
     return cash_delta
 
 
@@ -235,15 +206,8 @@ def _accumulate_flows(
     flows: FlowTotals,
     coverage: ReplayCoverage,
     reversed_types: dict[str, str],
-    overrides: dict[str, FlowClassification],
 ) -> None:
     """Attribute an event's cash movement to the category that performance measurement needs."""
-    override = overrides.get(event.id)
-    if override is not None:
-        # A ruling settles the question; the event type is what was unreliable in the first place.
-        _apply_classification(override, event, legs, cash_delta, flows, coverage)
-        return
-
     event_type = _effective_type(event, reversed_types)
     if event_type is None:
         coverage.unknown_flow_events += 1
@@ -304,24 +268,6 @@ def _leg_magnitude(leg: JournalLeg) -> Decimal:
 
 
 def _describe_gaps(coverage: ReplayCoverage) -> None:
-    if coverage.reclassified_legacy_events:
-        coverage.warnings.append(
-            f"{coverage.reclassified_legacy_events} migrated events were reclassified by hand "
-            "rather than derived from their event type; see the flow-classification overrides "
-            "for the reason recorded against each"
-        )
-    if coverage.unruled_cash_events:
-        coverage.warnings.append(
-            f"{coverage.unruled_cash_events} migrated cash movements have no ruling on whether "
-            "they crossed the portfolio boundary; any that actually settled a trade is being "
-            "counted as investor capital, which skews flow-based measures"
-        )
-    if coverage.unlinked_legacy_trades:
-        coverage.warnings.append(
-            f"{coverage.unlinked_legacy_trades} migrated trades carry no settlement linkage, so "
-            "replayed cash does not reflect the money they consumed; the linkage was never "
-            "recorded and has not been inferred. They move no cash, so they do not bias returns"
-        )
     if coverage.unknown_flow_events:
         coverage.warnings.append(
             f"{coverage.unknown_flow_events} events could not be classified as external or "

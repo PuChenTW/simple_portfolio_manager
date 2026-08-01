@@ -166,28 +166,6 @@ class PositionTag(Base):
     tag: Mapped[str] = mapped_column(String(50), primary_key=True)
 
 
-class Trade(Base):
-    __tablename__ = "trades"
-    __table_args__ = (
-        UniqueConstraint("portfolio_id", "request_id", name="uq_trade_request"),
-        Index("ix_trades_portfolio_executed", "portfolio_id", "executed_at"),
-    )
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    portfolio_id: Mapped[str] = mapped_column(
-        ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False
-    )
-    request_id: Mapped[str] = mapped_column(String(100), nullable=False)
-    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
-    ticker: Mapped[str] = mapped_column(ForeignKey("instruments.ticker"), nullable=False)
-    side: Mapped[str] = mapped_column(String(4), nullable=False)
-    quantity: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
-    unit_price: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
-    fee: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
-    executed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
 class CashBalance(Base):
     __tablename__ = "cash_balances"
 
@@ -196,25 +174,6 @@ class CashBalance(Base):
     )
     amount: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
-class CashTransaction(Base):
-    __tablename__ = "cash_transactions"
-    __table_args__ = (
-        UniqueConstraint("portfolio_id", "request_id", name="uq_cash_request"),
-        Index("ix_cash_portfolio_occurred", "portfolio_id", "occurred_at"),
-    )
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    portfolio_id: Mapped[str] = mapped_column(
-        ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False
-    )
-    request_id: Mapped[str] = mapped_column(String(100), nullable=False)
-    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
-    action: Mapped[str] = mapped_column(String(8), nullable=False)
-    amount: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
-    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class JournalEvent(Base):
@@ -245,8 +204,6 @@ class JournalEvent(Base):
     reverses_event_id: Mapped[str | None] = mapped_column(
         ForeignKey("journal_events.id", ondelete="RESTRICT")
     )
-    # Set when a legacy trade or cash row was migrated without a provable counterpart leg.
-    is_unlinked_legacy: Mapped[bool] = mapped_column(Boolean(), nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
@@ -416,40 +373,6 @@ class FxRate(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
-class EventFlowClassification(Base):
-    """A human ruling on what an event's cash movement means for performance.
-
-    The derived classification comes from the event type, which is right for anything posted
-    through the journal but wrong for migrated rows: a legacy `deposit` may record a trade
-    settlement rather than investor capital, and counting it as a contribution would make TWR
-    understate the return.
-
-    This never edits the event. It records a separate, higher-ranked opinion that replay reads
-    instead of the derived value, and `is_retracted` restores the original reading. `reason` is
-    required because a reclassification that cannot be justified later is indistinguishable from
-    a mistake.
-    """
-
-    __tablename__ = "event_flow_classifications"
-    __table_args__ = (
-        UniqueConstraint("event_id", "provenance", name="uq_event_flow_provenance"),
-        Index("ix_event_flow_event", "event_id"),
-    )
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    event_id: Mapped[str] = mapped_column(
-        ForeignKey("journal_events.id", ondelete="CASCADE"), nullable=False
-    )
-    classification: Mapped[str] = mapped_column(String(10), nullable=False)
-    provenance: Mapped[str] = mapped_column(String(20), nullable=False)
-    source: Mapped[str] = mapped_column(String(100), nullable=False)
-    reason: Mapped[str] = mapped_column(Text(), nullable=False)
-    effective_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    is_retracted: Mapped[bool] = mapped_column(Boolean(), nullable=False, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
 class PortfolioValuationSnapshot(Base):
     """What a portfolio was worth on one date, priced with data available at that time.
 
@@ -493,10 +416,6 @@ class PortfolioValuationSnapshot(Base):
     pricing_coverage_percent: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
     positions_total: Mapped[int] = mapped_column(Integer(), nullable=False)
     positions_priced: Mapped[int] = mapped_column(Integer(), nullable=False)
-    # Carried from the replay so a reader can see the journal was incomplete for this portfolio.
-    has_unlinked_legacy_events: Mapped[bool] = mapped_column(
-        Boolean(), nullable=False, default=False
-    )
     calculation_version: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(String(10), nullable=False)
     warnings: Mapped[str | None] = mapped_column(Text())

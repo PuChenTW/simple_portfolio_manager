@@ -276,39 +276,35 @@ def test_a_split_preserves_total_cost_basis_through_replay(session, funded) -> N
     assert replayed.cost_basis == Decimal("14000")
 
 
-def test_replay_reports_the_legacy_settlement_gap(session, harness) -> None:
-    """Migrated trades never recorded which cash settled them, so replayed cash overstates reality.
+def test_a_journaled_portfolio_replays_complete(session, harness) -> None:
+    """Every posted event classifies itself, so an ordinary portfolio reports no gaps.
 
-    This is the state of the user's own migrated database. The gap is surfaced rather than closed
-    by inference, because an invented settlement cannot later be told apart from a recorded one.
+    Coverage exists to surface what the service cannot determine. If it flagged a portfolio whose
+    record is complete, the signal would be noise and readers would learn to ignore it.
     """
-    from portfolio_manager.backfill import backfill_portfolio
-    from portfolio_manager.models import Portfolio
-
     portfolio_id = harness.portfolio()
     harness.client.post(
-        f"/api/v1/portfolios/{portfolio_id}/cash-transactions",
-        json={"request_id": "c-1", "action": "deposit", "amount": "10000"},
+        f"/api/v1/portfolios/{portfolio_id}/transactions",
+        json={"request_id": "c-1", "transaction_type": "deposit", "amount": "10000"},
     )
     harness.client.post(
-        f"/api/v1/portfolios/{portfolio_id}/trades",
+        f"/api/v1/portfolios/{portfolio_id}/transactions",
         json={
             "request_id": "t-1",
+            "transaction_type": "buy",
             "ticker": "AAPL",
-            "side": "buy",
             "quantity": "10",
             "unit_price": "140",
         },
     )
-    backfill_portfolio(session, session.get(Portfolio, portfolio_id))
-    session.commit()
 
     result = replay_state(session, portfolio_id, FUTURE)
 
-    assert result.cash == Decimal("10000"), "the migrated trade carries no cash leg"
-    assert result.coverage.unlinked_legacy_events == 2
-    assert result.coverage.is_complete is False
-    assert any("has not been inferred" in warning for warning in result.coverage.warnings)
+    # The buy settled against cash in the same event: 10,000 - 1,400.
+    assert result.cash == Decimal("8600")
+    assert result.coverage.unknown_flow_events == 0
+    assert result.coverage.is_complete is True
+    assert result.coverage.warnings == []
 
 
 def test_an_empty_portfolio_replays_to_zero(session, harness) -> None:

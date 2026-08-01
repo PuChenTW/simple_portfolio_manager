@@ -74,7 +74,7 @@ class PerformanceCoverage:
     snapshots_used: int = 0
     missing_dates: list[date] = field(default_factory=list)
     partial_snapshots: int = 0
-    unruled_legacy_events: int = 0
+    unclassified_flow_events: int = 0
     warnings: list[str] = field(default_factory=list)
 
     @property
@@ -82,7 +82,7 @@ class PerformanceCoverage:
         return (
             not self.missing_dates
             and self.partial_snapshots == 0
-            and self.unruled_legacy_events == 0
+            and self.unclassified_flow_events == 0
         )
 
 
@@ -374,18 +374,17 @@ def _assess_coverage(
 ) -> PerformanceCoverage:
     absent = missing_dates(snapshots, start_date, end_date)
     partial = [item for item in snapshots if item.status == SnapshotStatus.PARTIAL]
-    # Only unruled *cash* events bias a return. Migrated trades carry no cash leg, so their
-    # missing settlement linkage cannot move a flow-based measure and must not raise an alarm
-    # that no amount of work could ever clear.
-    unruled = replay_state(
+    # An event whose cash movement cannot be classified sits in neither the capital base nor the
+    # return, so both TWR and XIRR are computed over an incomplete picture.
+    unclassified = replay_state(
         session, portfolio_id, _end_of_day(end_date)
-    ).coverage.unruled_cash_events
+    ).coverage.unknown_flow_events
 
     coverage = PerformanceCoverage(
         snapshots_used=len(snapshots),
         missing_dates=absent,
         partial_snapshots=len(partial),
-        unruled_legacy_events=unruled,
+        unclassified_flow_events=unclassified,
     )
     if absent:
         coverage.warnings.append(
@@ -399,11 +398,11 @@ def _assess_coverage(
             "day. Their totals exclude that holding, so returns around those dates move for a "
             "reason that is not market performance."
         )
-    if unruled:
+    if unclassified:
         coverage.warnings.append(
-            f"{unruled} migrated events still have no ruling on whether they crossed the "
-            "portfolio boundary. Any of them that is really a trade settlement is being treated "
-            "as investor capital, which biases both TWR and XIRR."
+            f"{unclassified} events could not be classified as investor capital or portfolio "
+            "activity. Their cash sits outside both totals, so TWR and XIRR are measured over an "
+            "incomplete picture."
         )
     return coverage
 

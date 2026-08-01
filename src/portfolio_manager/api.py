@@ -27,15 +27,15 @@ from .corporate_actions import (
 )
 from .db import get_session
 from .errors import DomainError
-from .flows import derived_flow, resolve_flows
 from .identity import (
     build_instrument_profile,
     map_issuer,
     resolve_instrument,
     set_classification_override,
 )
+from .journal import derived_flow
 from .market import HistoryAdjustment, HistoryInterval, MarketProvider, YahooMarketProvider
-from .models import CashTransaction, Portfolio, PortfolioGroup, Trade
+from .models import Portfolio, PortfolioGroup
 from .performance import (
     TWR_METHOD_DESCRIPTION,
     XIRR_METHOD_DESCRIPTION,
@@ -50,9 +50,6 @@ from .postings import (
 )
 from .schemas import (
     BalanceRead,
-    CashTransactionCreate,
-    CashTransactionPage,
-    CashTransactionRead,
     ClassificationOverrideUpdate,
     ConsolidatedPositionRead,
     ConsolidatedSummaryRead,
@@ -97,9 +94,6 @@ from .schemas import (
     TagsRead,
     TagsUpdate,
     TechnicalSnapshotRead,
-    TradeCreate,
-    TradePage,
-    TradeRead,
     TransactionCreate,
     TransactionReverse,
     UnconvertedAmountRead,
@@ -108,14 +102,11 @@ from .schemas import (
 from .services import (
     MarketService,
     build_summary,
-    create_cash_transaction,
     create_portfolio,
-    create_trade,
     delete_portfolio,
     get_portfolio,
     market_response,
     normalize_tag,
-    page_total,
     replace_tags,
 )
 from .valuation import (
@@ -137,11 +128,10 @@ Local, single-user portfolio accounting API designed for autonomous agents and g
 - **This records completed transactions; it never places market orders.**
 - Every portfolio has exactly one `base_currency`. A trade is rejected unless the instrument's
   quote currency matches it. Use separate portfolios for USD and TWD assets.
-- `record_transaction` posts a settlement atomically: security, cash, fee, and tax legs commit
-  together or not at all. Prefer it for anything that moves cash and a position at once.
-- The older `record_trade` and `record_cash_transaction` remain independent ledgers with unchanged
-  semantics: recording a buy does **not** deduct cash, and a sell does **not** deposit proceeds.
-  They are retained for compatibility; new work should use `record_transaction`.
+- `record_transaction` is the single way to record activity. It posts a settlement atomically:
+  security, cash, fee, and tax legs commit together or not at all, so a position can never move
+  without the cash that paid for it. Correct a posted event with `reverse_transaction`; events are
+  never edited or deleted.
 - Send decimal values as JSON strings for exact input. Decimal values in responses are strings.
 - All timestamps are UTC RFC 3339 values. Omitted transaction times default to server time.
 - Mutation requests require a client-generated `request_id`. Retrying the same body with the same
@@ -194,17 +184,6 @@ OPENAPI_TAGS = [
         "description": (
             "Create isolated single-currency portfolios and read complete valuation summaries."
         ),
-    },
-    {
-        "name": "trades",
-        "description": (
-            "Record immutable executed spot trades. Trades update quantity, average cost, and P&L "
-            "but never change cash."
-        ),
-    },
-    {
-        "name": "cash",
-        "description": "Record deposits and withdrawals in a portfolio's base currency.",
     },
     {
         "name": "positions",
@@ -277,9 +256,8 @@ AGENT_SKILL_METADATA = {
     "instructions": [
         "Never describe recording a transaction as placing or executing an order.",
         "Keep every portfolio single-currency and verify ticker currency before a trade.",
-        "Prefer record_transaction, which posts a position and its settlement cash atomically.",
-        "record_trade and record_cash_transaction are legacy independent ledgers; a buy recorded "
-        "through record_trade does not deduct cash.",
+        "Use record_transaction, which posts a position and its settlement cash atomically.",
+        "Correct a posted event with reverse_transaction; never edit or delete one.",
         "Generate one unique request_id per logical mutation and reuse it only for exact retries.",
         "Check stale, provider_as_of, fetched_at, and warnings before using a market price.",
         "Send exact quantities and monetary values as decimal strings.",
@@ -307,7 +285,7 @@ AGENT_SKILL_METADATA = {
 
 app = FastAPI(
     title="Local Portfolio Manager",
-    version="0.1.0",
+    version="0.2.0",
     summary="Agent-friendly accounting for cash, stocks, and crypto portfolios",
     description=API_DESCRIPTION,
     openapi_tags=OPENAPI_TAGS,
@@ -509,129 +487,6 @@ def portfolio_summary(portfolio_id: PortfolioId, session: SessionDep, market: Ma
     top-level `warnings` before using the valuation for a decision.
     """
     return build_summary(session, market, portfolio_id)
-
-
-@app.post(
-    "/api/v1/portfolios/{portfolio_id}/trades",
-    response_model=TradeRead,
-    status_code=status.HTTP_201_CREATED,
-    operation_id="record_trade",
-    summary="Record an executed buy or sell",
-    response_description="The immutable trade ledger entry",
-    responses={
-        404: {"model": ErrorResponse, "description": "`portfolio_not_found`."},
-        409: {"model": ErrorResponse, "description": "`idempotency_conflict`."},
-        503: {
-            "model": ErrorResponse,
-            "description": "Ticker metadata is unavailable and not cached.",
-        },
-    },
-    tags=["trades"],
-)
-def add_trade(
-    portfolio_id: PortfolioId, data: TradeCreate, session: SessionDep, market: MarketDep
-) -> Trade:
-    """
-    Record a completed spot transaction and update the position in O(1).
-
-    Provide the actual execution price rather than the quote returned by the market endpoint.
-    Buys recalculate moving-average cost; sells realize P&L and cannot exceed current quantity.
-    This operation never changes cash. Retry the exact request with the same `request_id`.
-    """
-    return create_trade(session, market, portfolio_id, data)
-
-
-@app.get(
-    "/api/v1/portfolios/{portfolio_id}/trades",
-    response_model=TradePage,
-    operation_id="list_trades",
-    summary="List the trade ledger",
-    response_description="A reverse-chronological page of immutable trades",
-    responses={404: {"model": ErrorResponse, "description": "`portfolio_not_found`."}},
-    tags=["trades"],
-)
-def list_trades(
-    portfolio_id: PortfolioId,
-    session: SessionDep,
-    offset: Annotated[int, Query(ge=0, description="Zero-based number of entries to skip.")] = 0,
-    limit: Annotated[
-        int, Query(ge=1, le=200, description="Maximum entries to return, from 1 to 200.")
-    ] = 50,
-) -> TradePage:
-    """Audit recorded executions. This endpoint does not return live valuation data."""
-    get_portfolio(session, portfolio_id)
-    items = session.scalars(
-        select(Trade)
-        .where(Trade.portfolio_id == portfolio_id)
-        .order_by(Trade.executed_at.desc())
-        .offset(offset)
-        .limit(limit)
-    ).all()
-    return TradePage(
-        items=[TradeRead.model_validate(item) for item in items],
-        offset=offset,
-        limit=limit,
-        total=page_total(session, Trade, portfolio_id),
-    )
-
-
-@app.post(
-    "/api/v1/portfolios/{portfolio_id}/cash-transactions",
-    response_model=CashTransactionRead,
-    status_code=status.HTTP_201_CREATED,
-    operation_id="record_cash_transaction",
-    summary="Record a cash deposit or withdrawal",
-    response_description="The immutable cash ledger entry",
-    responses={
-        404: {"model": ErrorResponse, "description": "`portfolio_not_found`."},
-        409: {"model": ErrorResponse, "description": "`idempotency_conflict`."},
-    },
-    tags=["cash"],
-)
-def add_cash_transaction(
-    portfolio_id: PortfolioId, data: CashTransactionCreate, session: SessionDep
-) -> CashTransaction:
-    """
-    Adjust cash in the portfolio's base currency without touching asset positions.
-
-    Withdrawals cannot exceed available cash. Asset trades never call this operation implicitly,
-    so record settlement cash separately only when that matches the source account.
-    """
-    return create_cash_transaction(session, portfolio_id, data)
-
-
-@app.get(
-    "/api/v1/portfolios/{portfolio_id}/cash-transactions",
-    response_model=CashTransactionPage,
-    operation_id="list_cash_transactions",
-    summary="List the cash ledger",
-    response_description="A reverse-chronological page of cash events",
-    responses={404: {"model": ErrorResponse, "description": "`portfolio_not_found`."}},
-    tags=["cash"],
-)
-def list_cash_transactions(
-    portfolio_id: PortfolioId,
-    session: SessionDep,
-    offset: Annotated[int, Query(ge=0, description="Zero-based number of entries to skip.")] = 0,
-    limit: Annotated[
-        int, Query(ge=1, le=200, description="Maximum entries to return, from 1 to 200.")
-    ] = 50,
-) -> CashTransactionPage:
-    """Audit deposits and withdrawals. Current cash is available from the portfolio summary."""
-    get_portfolio(session, portfolio_id)
-    items = session.scalars(
-        select(CashTransaction)
-        .where(CashTransaction.portfolio_id == portfolio_id)
-        .order_by(CashTransaction.occurred_at.desc())
-        .offset(offset)
-        .limit(limit)
-    ).all()
-    return CashTransactionPage(
-        items=[CashTransactionRead.model_validate(item) for item in items],
-        offset=offset,
-        limit=limit,
-        total=page_total(session, CashTransaction, portfolio_id),
-    )
 
 
 @app.get(
@@ -926,8 +781,8 @@ def post_transaction(
     """
     Record a completed transaction as one atomic event; this never places an order.
 
-    Unlike `record_trade`, which only moves the position, this posts the security, fee, tax, and
-    settlement-cash legs together: either every leg and both projections commit, or none does.
+    This posts the security, fee, tax, and settlement-cash legs together: either every leg and
+    both projections commit, or none does, so a position never moves without its settlement.
     Fees and taxes on a trade capitalize into cost basis. Income is recorded gross with its
     withholding split out, and is never treated as an investor contribution.
     """
@@ -1033,9 +888,8 @@ def read_journal_events(
     )
     # Resolve the flow classification for the whole page in one query: a human ruling outranks
     # the value derived from the event type, and a reader cannot tell them apart without this.
-    overrides = resolve_flows(session, [event.id for event in events])
     return JournalEventPage(
-        items=[_journal_event_read(event, overrides.get(event.id)) for event in events],
+        items=[_journal_event_read(event) for event in events],
         total=total,
         offset=offset,
         limit=limit,
@@ -1070,9 +924,7 @@ def _event_detail_response(
     report = detail["balance"]
     event_row = detail["event"]
     return JournalEventDetail(
-        event=_journal_event_read(
-            event_row, resolve_flows(session, [event_row.id]).get(event_row.id)
-        ),
+        event=_journal_event_read(event_row),
         legs=[
             JournalLegRead(
                 leg_type=leg.leg_type.value,
@@ -1444,7 +1296,6 @@ def _snapshot_payload(session: Session, snapshot) -> SnapshotRead:
         pricing_coverage_percent=snapshot.pricing_coverage_percent,
         positions_total=snapshot.positions_total,
         positions_priced=snapshot.positions_priced,
-        has_unlinked_legacy_events=snapshot.has_unlinked_legacy_events,
         calculation_version=snapshot.calculation_version,
         status=snapshot.status,
         calculation_method=CALCULATION_METHOD,
@@ -1494,8 +1345,8 @@ def post_valuation_snapshot(
     pass `force_revision` to replace it deliberately.
 
     A holding with no price on or before the date is excluded from `securities_value`, carried at
-    cost in `unpriced_market_value`, and makes `status` partial. Check `status`, `warnings`, and
-    `has_unlinked_legacy_events` before treating the total as authoritative.
+    cost in `unpriced_market_value`, and makes `status` partial. Check `status` and `warnings`
+    before treating the total as authoritative.
     """
     snapshot = create_snapshot(
         session,
@@ -1596,12 +1447,6 @@ def get_nav_history(
             f"{len(partial)} snapshots are partial because at least one holding could not be "
             "priced on that date"
         )
-    if any(item.has_unlinked_legacy_events for item in snapshots):
-        warnings.append(
-            "This portfolio contains migrated rows whose trade-to-cash linkage was never "
-            "recorded, so cash and any return derived from it are unreliable"
-        )
-
     return NavHistoryRead(
         portfolio_id=portfolio_id,
         base_currency=portfolio.base_currency,
@@ -1621,7 +1466,6 @@ def get_nav_history(
                 external_flow_amount=item.external_flow_amount,
                 pricing_coverage_percent=item.pricing_coverage_percent,
                 status=item.status,
-                has_unlinked_legacy_events=item.has_unlinked_legacy_events,
             )
             for item in snapshots
         ],
@@ -1691,7 +1535,7 @@ def get_portfolio_performance(
             snapshots_used=result.coverage.snapshots_used,
             missing_dates=result.coverage.missing_dates,
             partial_snapshots=result.coverage.partial_snapshots,
-            unruled_legacy_events=result.coverage.unruled_legacy_events,
+            unclassified_flow_events=result.coverage.unclassified_flow_events,
             is_reliable=result.coverage.is_reliable,
             warnings=result.coverage.warnings,
         ),
@@ -1708,21 +1552,15 @@ def get_portfolio_performance(
     )
 
 
-def _journal_event_read(event, override) -> JournalEventRead:
-    """A journal event with the flow classification actually in force.
-
-    `override` is the human ruling when one exists. Reporting it separately from the derived
-    value lets a reader see that somebody settled the question rather than the event type
-    having implied it.
-    """
+def _journal_event_read(event) -> JournalEventRead:
+    """A journal event with the flow classification implied by its type."""
     return JournalEventRead(
         **{
             field: getattr(event, field)
             for field in JournalEventRead.model_fields
-            if field not in {"flow_classification", "flow_is_manual"}
+            if field != "flow_classification"
         },
-        flow_classification=override or derived_flow(event),
-        flow_is_manual=override is not None,
+        flow_classification=derived_flow(event.event_type),
     )
 
 

@@ -140,89 +140,6 @@ async def get_portfolio_summary(portfolio_id: str) -> dict[str, Any]:
     return await _request("GET", f"/api/v1/portfolios/{portfolio_id}/summary")
 
 
-# --- Trades -----------------------------------------------------------------
-
-
-@mcp.tool()
-async def record_trade(
-    portfolio_id: str,
-    request_id: str,
-    ticker: str,
-    side: str,
-    quantity: str,
-    unit_price: str,
-    fee: str = "0",
-    executed_at: str | None = None,
-) -> dict[str, Any]:
-    """Record a completed spot buy or sell; this never places an order and never changes cash.
-
-    `request_id` is a client-generated idempotency key: reuse it only to retry the exact same
-    trade. `side` is "buy" or "sell". Send `quantity`, `unit_price`, and `fee` as decimal
-    strings for exact input. Provide the actual execution price rather than a market quote.
-    Buys recalculate moving-average cost; sells realize P&L and cannot exceed current quantity.
-    `executed_at` is RFC 3339; omit it to use server time.
-    """
-    payload: dict[str, Any] = {
-        "request_id": request_id,
-        "ticker": ticker,
-        "side": side,
-        "quantity": quantity,
-        "unit_price": unit_price,
-        "fee": fee,
-    }
-    if executed_at is not None:
-        payload["executed_at"] = executed_at
-    return await _request("POST", f"/api/v1/portfolios/{portfolio_id}/trades", json=payload)
-
-
-@mcp.tool()
-async def list_trades(portfolio_id: str, offset: int = 0, limit: int = 50) -> dict[str, Any]:
-    """List the reverse-chronological trade ledger. Audit only; no live valuation is returned."""
-    params = {"offset": offset, "limit": limit}
-    return await _request("GET", f"/api/v1/portfolios/{portfolio_id}/trades", params=params)
-
-
-# --- Cash -------------------------------------------------------------------
-
-
-@mcp.tool()
-async def record_cash_transaction(
-    portfolio_id: str,
-    request_id: str,
-    action: str,
-    amount: str,
-    occurred_at: str | None = None,
-) -> dict[str, Any]:
-    """Record a cash deposit or withdrawal in the base currency, independent of asset trades.
-
-    `request_id` is a client-generated idempotency key: reuse it only for exact retries.
-    `action` is "deposit" or "withdraw". Send `amount` as a decimal string. Withdrawals cannot
-    exceed available cash. Asset trades never adjust cash, so record settlement cash separately
-    only when that matches the source account. `occurred_at` is RFC 3339; omit for server time.
-    """
-    payload: dict[str, Any] = {
-        "request_id": request_id,
-        "action": action,
-        "amount": amount,
-    }
-    if occurred_at is not None:
-        payload["occurred_at"] = occurred_at
-    return await _request(
-        "POST", f"/api/v1/portfolios/{portfolio_id}/cash-transactions", json=payload
-    )
-
-
-@mcp.tool()
-async def list_cash_transactions(
-    portfolio_id: str, offset: int = 0, limit: int = 50
-) -> dict[str, Any]:
-    """List the reverse-chronological cash ledger. Current cash is in the portfolio summary."""
-    params = {"offset": offset, "limit": limit}
-    return await _request(
-        "GET", f"/api/v1/portfolios/{portfolio_id}/cash-transactions", params=params
-    )
-
-
 # --- Positions --------------------------------------------------------------
 
 
@@ -348,9 +265,10 @@ async def record_transaction(
 ) -> dict[str, Any]:
     """Record a completed transaction and its cash effect as one atomic event.
 
-    Prefer this over `record_trade` plus `record_cash_transaction`: those are two independent
-    writes that can leave a position updated with cash untouched, while this posts every leg
-    together or not at all. This never places an order.
+    This is the only way to record activity. Every leg -- security, cash, fee, tax -- commits
+    together or not at all, so a position can never move without the cash that paid for it.
+    Correct a posted event with `reverse_transaction`; events are never edited or deleted.
+    This never places an order.
 
     `transaction_type` is buy, sell, deposit, withdrawal, transfer_in, transfer_out, dividend,
     interest, fee, or tax. Buys and sells need `ticker`, `quantity`, and the actual execution
@@ -664,8 +582,6 @@ async def create_valuation_snapshot(
     Read `status` before using the total. A `partial` snapshot means at least one holding had no
     price on that date: it is excluded from `securities_value` and carried at cost in
     `unpriced_market_value`, so the total understates the portfolio by an amount you can see.
-    Check `has_unlinked_legacy_events` too -- when true, cash came from migrated rows whose
-    settlement linkage was never recorded.
     """
     payload = {"valuation_date": valuation_date, "force_revision": force_revision}
     return await _request(

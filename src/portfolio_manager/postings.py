@@ -341,7 +341,6 @@ def _persist(
     *,
     event_type: EventType,
     reverses_event_id: str | None = None,
-    is_unlinked_legacy: bool = False,
 ) -> JournalEvent:
     """Write the event header and its legs. The caller owns the transaction boundary."""
     now = utc_now()
@@ -360,7 +359,6 @@ def _persist(
         source_reference=data.source_reference,
         memo=data.memo,
         reverses_event_id=reverses_event_id,
-        is_unlinked_legacy=is_unlinked_legacy,
         created_at=now,
     )
     session.add(event)

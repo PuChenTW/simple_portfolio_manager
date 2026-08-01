@@ -68,20 +68,29 @@ def test_dashboard_and_static_assets_are_available_without_changing_openapi(harn
 
 def test_cash_balance_guards_and_idempotency(harness) -> None:
     portfolio_id = harness.portfolio()
-    endpoint = f"/api/v1/portfolios/{portfolio_id}/cash-transactions"
-    deposit = {"request_id": "cash-1", "action": "deposit", "amount": "1000.25"}
+    endpoint = f"/api/v1/portfolios/{portfolio_id}/transactions"
+    deposit = {
+        "request_id": "cash-1",
+        "transaction_type": "deposit",
+        "amount": "1000.25",
+    }
 
     first = harness.client.post(endpoint, json=deposit)
     retry = harness.client.post(endpoint, json=deposit)
     assert first.status_code == retry.status_code == 201
-    assert first.json()["id"] == retry.json()["id"]
+    assert first.json()["event"]["id"] == retry.json()["event"]["id"]
 
     conflict = harness.client.post(endpoint, json={**deposit, "amount": "2"})
     assert conflict.status_code == 409
     assert conflict.json()["code"] == "idempotency_conflict"
 
     excessive = harness.client.post(
-        endpoint, json={"request_id": "cash-2", "action": "withdraw", "amount": "1001"}
+        endpoint,
+        json={
+            "request_id": "cash-2",
+            "transaction_type": "withdrawal",
+            "amount": "1001",
+        },
     )
     assert excessive.status_code == 422
     assert excessive.json()["code"] == "insufficient_cash"
@@ -93,40 +102,41 @@ def test_cash_balance_guards_and_idempotency(harness) -> None:
 
 
 def test_moving_average_pnl_fees_and_weights(harness) -> None:
+    """Buy fees raise average cost; sell fees reduce realized P&L, and cash follows every leg."""
     portfolio_id = harness.portfolio()
-    trades = f"/api/v1/portfolios/{portfolio_id}/trades"
-    cash = f"/api/v1/portfolios/{portfolio_id}/cash-transactions"
+    endpoint = f"/api/v1/portfolios/{portfolio_id}/transactions"
     harness.client.post(
-        cash, json={"request_id": "cash", "action": "deposit", "amount": "1000"}
+        endpoint,
+        json={"request_id": "cash", "transaction_type": "deposit", "amount": "5000"},
     )
     payloads = [
         {
             "request_id": "buy-1",
+            "transaction_type": "buy",
             "ticker": "aapl",
-            "side": "buy",
             "quantity": "10",
             "unit_price": "100",
             "fee": "10",
         },
         {
             "request_id": "buy-2",
+            "transaction_type": "buy",
             "ticker": "AAPL",
-            "side": "buy",
             "quantity": "10",
             "unit_price": "120",
             "fee": "10",
         },
         {
             "request_id": "sell-1",
+            "transaction_type": "sell",
             "ticker": "AAPL",
-            "side": "sell",
             "quantity": "5",
             "unit_price": "130",
             "fee": "5",
         },
     ]
     for payload in payloads:
-        response = harness.client.post(trades, json=payload)
+        response = harness.client.post(endpoint, json=payload)
         assert response.status_code == 201, response.text
 
     summary = harness.client.get(f"/api/v1/portfolios/{portfolio_id}/summary").json()
@@ -136,24 +146,30 @@ def test_moving_average_pnl_fees_and_weights(harness) -> None:
     assert position["market_value"] == "2100"
     assert position["realized_pnl"] == "90"
     assert position["unrealized_pnl"] == "435"
-    assert summary["total_pnl"] == "525"
-    assert Decimal(position["weight_percent"]) == Decimal("2100") / Decimal("3100") * 100
-    assert Decimal(summary["cash"]["weight_percent"]) == Decimal("1000") / Decimal("3100") * 100
+    # Unlike the removed trade ledger, every leg settles: cash reflects what the trades consumed.
+    assert summary["cash_value"] == "3425"
+    assert Decimal(position["weight_percent"]) == Decimal("2100") / Decimal("5525") * 100
+    assert Decimal(summary["cash"]["weight_percent"]) == Decimal("3425") / Decimal("5525") * 100
 
-    retry = harness.client.post(trades, json=payloads[0])
+    retry = harness.client.post(endpoint, json=payloads[0])
     assert retry.status_code == 201
-    assert harness.client.get(trades).json()["total"] == 3
+    events = harness.client.get(f"/api/v1/portfolios/{portfolio_id}/transactions").json()
+    assert events["total"] == 4
 
 
 def test_fractional_crypto_and_sell_guard(harness) -> None:
     portfolio_id = harness.portfolio()
-    endpoint = f"/api/v1/portfolios/{portfolio_id}/trades"
+    endpoint = f"/api/v1/portfolios/{portfolio_id}/transactions"
+    harness.client.post(
+        endpoint,
+        json={"request_id": "seed", "transaction_type": "deposit", "amount": "10"},
+    )
     buy = harness.client.post(
         endpoint,
         json={
             "request_id": "btc-buy",
+            "transaction_type": "buy",
             "ticker": "BTC-USD",
-            "side": "buy",
             "quantity": "0.00000001",
             "unit_price": "90000.12345678",
         },
@@ -163,8 +179,8 @@ def test_fractional_crypto_and_sell_guard(harness) -> None:
         endpoint,
         json={
             "request_id": "btc-sell",
+            "transaction_type": "sell",
             "ticker": "BTC-USD",
-            "side": "sell",
             "quantity": "0.00000002",
             "unit_price": "100000",
         },
@@ -176,11 +192,11 @@ def test_fractional_crypto_and_sell_guard(harness) -> None:
 def test_currency_mismatch(harness) -> None:
     portfolio_id = harness.portfolio()
     response = harness.client.post(
-        f"/api/v1/portfolios/{portfolio_id}/trades",
+        f"/api/v1/portfolios/{portfolio_id}/transactions",
         json={
             "request_id": "wrong-currency",
+            "transaction_type": "buy",
             "ticker": "2330.TW",
-            "side": "buy",
             "quantity": "1",
             "unit_price": "1000",
         },
@@ -191,14 +207,18 @@ def test_currency_mismatch(harness) -> None:
 
 def test_tags_normalization_and_filters(harness) -> None:
     portfolio_id = harness.portfolio()
-    trades = f"/api/v1/portfolios/{portfolio_id}/trades"
+    endpoint = f"/api/v1/portfolios/{portfolio_id}/transactions"
+    harness.client.post(
+        endpoint,
+        json={"request_id": "seed", "transaction_type": "deposit", "amount": "1000"},
+    )
     for request_id, ticker in [("a", "AAPL"), ("m", "MSFT")]:
         response = harness.client.post(
-            trades,
+            endpoint,
             json={
                 "request_id": request_id,
+                "transaction_type": "buy",
                 "ticker": ticker,
-                "side": "buy",
                 "quantity": "1",
                 "unit_price": "100",
             },
@@ -353,8 +373,8 @@ def test_openapi_is_self_describing_for_agents(harness) -> None:
         "get_market_instrument",
         "get_market_history",
         "get_technical_snapshot",
-        "record_trade",
-        "record_cash_transaction",
+        "record_transaction",
+        "reverse_transaction",
         "replace_position_tags",
         "get_portfolio_summary",
     }.issubset(operation_ids)
@@ -371,7 +391,10 @@ def test_openapi_is_self_describing_for_agents(harness) -> None:
     assert "as_of" in technical["description"]
     event_schema = schema["components"]["schemas"]["EventAnalysisRead"]
     assert "typical price" in event_schema["properties"]["anchored_vwap"]["description"]
-    trade = schema["components"]["schemas"]["TradeCreate"]
-    assert trade["examples"]
-    assert "idempotency" in trade["properties"]["request_id"]["description"]
-    assert "actual execution price" in trade["properties"]["unit_price"]["description"].lower()
+    transaction = schema["components"]["schemas"]["TransactionCreate"]
+    assert transaction["examples"]
+    assert "idempotency" in transaction["properties"]["request_id"]["description"]
+    assert (
+        "actual execution price"
+        in transaction["properties"]["unit_price"]["description"].lower()
+    )

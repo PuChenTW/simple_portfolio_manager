@@ -38,20 +38,6 @@ class ApiModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class TradeSide(StrEnum):
-    """Whether a spot trade adds to or reduces a position."""
-
-    BUY = "buy"
-    SELL = "sell"
-
-
-class CashAction(StrEnum):
-    """Whether an independent cash ledger event adds or removes cash."""
-
-    DEPOSIT = "deposit"
-    WITHDRAW = "withdraw"
-
-
 class TagMode(StrEnum):
     """How multiple tag filters are combined."""
 
@@ -94,139 +80,6 @@ class PortfolioRead(ApiModel):
     name: str
     base_currency: str
     created_at: datetime
-
-
-class TradeCreate(ApiModel):
-    """Record an executed spot trade; this API does not place orders."""
-
-    request_id: RequestId
-    ticker: Annotated[
-        str,
-        StringConstraints(strip_whitespace=True, min_length=1, max_length=32),
-        Field(
-            description=(
-                "Yahoo-compatible ticker: AAPL, 2330.TW, 8069.TWO, or BTC-USD. "
-                "It is normalized to uppercase."
-            ),
-            examples=["AAPL"],
-        ),
-    ]
-    side: TradeSide = Field(
-        description="Use buy to add quantity or sell to reduce an existing position."
-    )
-    quantity: PositiveDecimal = Field(
-        description="Executed asset quantity; fractional values work."
-    )
-    unit_price: PositiveDecimal = Field(
-        description="Actual execution price per unit in the instrument quote currency."
-    )
-    fee: Annotated[
-        Decimal,
-        Field(
-            ge=0,
-            description=(
-                "Transaction fee in portfolio currency. Buy fees increase average cost; sell "
-                "fees reduce realized P&L."
-            ),
-            examples=["1.25"],
-        ),
-    ] = Decimal("0")
-    executed_at: datetime | None = Field(
-        default=None,
-        description="Execution time as RFC 3339. Omit to use the current UTC server time.",
-        examples=["2026-07-22T13:00:00Z"],
-    )
-
-    model_config = ConfigDict(
-        json_schema_extra={
-            "examples": [
-                {
-                    "request_id": "trade-20260722-001",
-                    "ticker": "AAPL",
-                    "side": "buy",
-                    "quantity": "10",
-                    "unit_price": "200.50",
-                    "fee": "1.25",
-                    "executed_at": "2026-07-22T13:00:00Z",
-                }
-            ]
-        }
-    )
-
-    @field_validator("ticker")
-    @classmethod
-    def normalize_ticker(cls, value: str) -> str:
-        return value.upper()
-
-
-class TradeRead(ApiModel):
-    """An immutable trade ledger entry."""
-
-    id: str
-    portfolio_id: str
-    request_id: str
-    ticker: str
-    side: TradeSide
-    quantity: Decimal
-    unit_price: Decimal
-    fee: Decimal
-    executed_at: datetime
-    created_at: datetime
-
-
-class TradePage(ApiModel):
-    """A reverse-chronological page of trade ledger entries."""
-
-    items: list[TradeRead]
-    offset: int
-    limit: int
-    total: int
-
-
-class CashTransactionCreate(ApiModel):
-    """Record cash independently from asset trades."""
-
-    request_id: RequestId
-    action: CashAction = Field(description="Deposit adds cash; withdraw removes available cash.")
-    amount: PositiveDecimal = Field(description="Cash amount in the portfolio base currency.")
-    occurred_at: datetime | None = Field(
-        default=None,
-        description="Event time as RFC 3339. Omit to use the current UTC server time.",
-        examples=["2026-07-22T13:00:00Z"],
-    )
-
-    model_config = ConfigDict(
-        json_schema_extra={
-            "examples": [
-                {
-                    "request_id": "cash-20260722-001",
-                    "action": "deposit",
-                    "amount": "10000",
-                }
-            ]
-        }
-    )
-
-
-class CashTransactionRead(ApiModel):
-    """An immutable cash ledger entry."""
-
-    id: str
-    portfolio_id: str
-    request_id: str
-    action: CashAction
-    amount: Decimal
-    occurred_at: datetime
-    created_at: datetime
-
-
-class CashTransactionPage(ApiModel):
-    """A reverse-chronological page of cash ledger entries."""
-
-    items: list[CashTransactionRead]
-    offset: int
-    limit: int
-    total: int
 
 
 class TagsUpdate(ApiModel):
@@ -628,6 +481,35 @@ class TransactionCreate(ApiModel):
     )
     memo: str | None = None
 
+    # This is the only write path into the ledger, so the examples carry the three shapes an
+    # agent needs: cash in, a purchase, and an opening balance transferred from another account.
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "request_id": "dep-20260801-001",
+                    "transaction_type": "deposit",
+                    "amount": "10000",
+                },
+                {
+                    "request_id": "buy-20260801-001",
+                    "transaction_type": "buy",
+                    "ticker": "AAPL",
+                    "quantity": "10",
+                    "unit_price": "200",
+                    "fee": "1",
+                },
+                {
+                    "request_id": "open-20260102-001",
+                    "transaction_type": "transfer_in",
+                    "amount": "65000",
+                    "occurred_at": "2026-01-02T00:00:00Z",
+                    "memo": "Opening balance: cash plus the cost basis of transferred holdings",
+                },
+            ]
+        }
+    )
+
     @field_validator("quantity", "unit_price")
     @classmethod
     def validate_positive(cls, value: Decimal | None) -> Decimal | None:
@@ -683,25 +565,11 @@ class JournalEventRead(ApiModel):
     source_reference: str | None
     memo: str | None
     reverses_event_id: str | None
-    is_unlinked_legacy: bool = Field(
-        description=(
-            "True when a migrated legacy trade or cash row had no provable settlement counterpart."
-        )
-    )
     flow_classification: FlowClassification = Field(
         description=(
             "Whether this event moved investor capital across the portfolio boundary (external) "
-            "or was portfolio activity (internal). Derived from the event type unless a person "
-            "ruled otherwise, in which case `flow_is_manual` is true."
+            "or was portfolio activity (internal), derived from the event type."
         )
-    )
-    flow_is_manual: bool = Field(
-        default=False,
-        description=(
-            "True when the classification comes from a recorded human ruling rather than the "
-            "event type. Migrated rows often need one, because the pre-journal model could not "
-            "distinguish a trade settlement from a deposit."
-        ),
     )
     created_at: datetime
 
@@ -936,12 +804,6 @@ class SnapshotRead(ApiModel):
     pricing_coverage_percent: Decimal
     positions_total: int
     positions_priced: int
-    has_unlinked_legacy_events: bool = Field(
-        description=(
-            "True when this portfolio contains migrated rows whose trade-to-cash linkage was "
-            "never recorded, which makes cash and any return derived from it unreliable."
-        )
-    )
     calculation_version: str
     status: str = Field(description="`complete` when every holding was priced, else `partial`.")
     calculation_method: str
@@ -963,7 +825,6 @@ class SnapshotSummary(ApiModel):
     external_flow_amount: Decimal
     pricing_coverage_percent: Decimal
     status: str
-    has_unlinked_legacy_events: bool
 
 
 class NavHistoryRead(ApiModel):
@@ -1028,11 +889,11 @@ class PerformanceCoverageRead(ApiModel):
     snapshots_used: int
     missing_dates: list[date]
     partial_snapshots: int
-    unruled_legacy_events: int
+    unclassified_flow_events: int
     is_reliable: bool = Field(
         description=(
-            "True only when the period has no gaps, no partial snapshots, and no migrated "
-            "events awaiting a ruling. False means the figures are computable but biased."
+            "True only when the period has no gaps, no partial snapshots, and every event's "
+            "cash flow could be classified. False means the figures are computable but biased."
         )
     )
     warnings: list[str]

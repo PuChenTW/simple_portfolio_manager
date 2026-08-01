@@ -22,8 +22,7 @@ from portfolio_manager.mcp_server import (
     get_technical_snapshot,
     list_portfolios,
     map_instrument_issuer,
-    record_cash_transaction,
-    record_trade,
+    record_transaction,
     set_instrument_classification_override,
 )
 
@@ -58,20 +57,23 @@ async def test_read_write_round_trip(mcp_client) -> None:
     fetched = await get_portfolio(portfolio_id)
     assert fetched["base_currency"] == "USD"
 
-    await record_cash_transaction(
-        portfolio_id=portfolio_id, request_id="cash-1", action="deposit", amount="10000"
+    await record_transaction(
+        portfolio_id=portfolio_id,
+        request_id="cash-1",
+        transaction_type="deposit",
+        amount="10000",
     )
-    trade = await record_trade(
+    detail = await record_transaction(
         portfolio_id=portfolio_id,
         request_id="trade-1",
+        transaction_type="buy",
         ticker="AAPL",
-        side="buy",
         quantity="10",
         unit_price="140",
         fee="1",
     )
-    assert trade["ticker"] == "AAPL"
-    assert trade["quantity"] == "10"
+    assert detail["event"]["event_type"] == "buy"
+    assert detail["balance"]["balanced"] is True
 
 
 async def test_domain_error_preserves_envelope(mcp_client) -> None:
@@ -98,11 +100,11 @@ async def test_delete_portfolio_removes_it(mcp_client) -> None:
 async def test_insufficient_position_error(mcp_client) -> None:
     portfolio = await create_portfolio(name="US", base_currency="USD")
     with pytest.raises(ApiError) as excinfo:
-        await record_trade(
+        await record_transaction(
             portfolio_id=portfolio["id"],
             request_id="sell-1",
+            transaction_type="sell",
             ticker="AAPL",
-            side="sell",
             quantity="5",
             unit_price="140",
         )
@@ -112,13 +114,19 @@ async def test_insufficient_position_error(mcp_client) -> None:
 async def test_write_is_idempotent(mcp_client) -> None:
     portfolio = await create_portfolio(name="US", base_currency="USD")
     portfolio_id = portfolio["id"]
-    first = await record_cash_transaction(
-        portfolio_id=portfolio_id, request_id="cash-9", action="deposit", amount="500"
+    first = await record_transaction(
+        portfolio_id=portfolio_id,
+        request_id="cash-9",
+        transaction_type="deposit",
+        amount="500",
     )
-    second = await record_cash_transaction(
-        portfolio_id=portfolio_id, request_id="cash-9", action="deposit", amount="500"
+    second = await record_transaction(
+        portfolio_id=portfolio_id,
+        request_id="cash-9",
+        transaction_type="deposit",
+        amount="500",
     )
-    assert first["id"] == second["id"]
+    assert first["event"]["id"] == second["event"]["id"]
 
 
 async def test_market_research_tools_forward_query_parameters(mcp_client) -> None:

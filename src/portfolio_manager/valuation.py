@@ -252,7 +252,6 @@ def _build_snapshot(
         pricing_coverage_percent=coverage,
         positions_total=total_positions,
         positions_priced=priced_count,
-        has_unlinked_legacy_events=state.coverage.unlinked_legacy_events > 0,
         calculation_version=CALCULATION_VERSION,
         status=status,
         warnings=json.dumps(warnings) if warnings else None,

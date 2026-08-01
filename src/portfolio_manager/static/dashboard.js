@@ -413,10 +413,6 @@ const WARNING_PATTERNS = [
   [/(\d+) dates in this period have no snapshot/, (n) => `此區間有 ${n} 日沒有估值快照，跨越缺口的子期間會被直接鏈結，可能低估波動並使報酬失真。`],
   [/(\d+) dates in this range have no snapshot/, (n) => `此區間有 ${n} 日沒有估值快照，僅列出缺漏日期，不會內插補值。`],
   [/(\d+) snapshots are partial/, (n) => `${n} 個快照為部分估值：當日有標的無法取得價格，已排除在總額外。`],
-  [/(\d+) migrated events still have no ruling/, (n) => `${n} 筆遷移現金事件尚未裁定為外部資金或投資組合活動，會使 TWR 與 XIRR 失真。`],
-  [/(\d+) migrated cash movements have no ruling/, (n) => `${n} 筆遷移現金事件尚未裁定其性質，可能被誤計為投資人出資。`],
-  [/(\d+) migrated trades carry no settlement linkage/, (n) => `${n} 筆遷移交易沒有結算連結（原始資料從未記錄），但不影響報酬計算。`],
-  [/(\d+) migrated events were reclassified by hand/, (n) => `${n} 筆遷移事件已由人工重新分類，理由記錄在該筆覆寫中。`],
 ];
 
 function translateWarning(message) {
@@ -558,7 +554,7 @@ function renderPerformance(performance, history, currency) {
   elements.perfFlowsDetail.textContent = `流入 ${formatMoney(performance.external_inflows, currency)} · 流出 ${formatMoney(performance.external_outflows, currency)}`;
 
   const messages = [...performance.coverage.warnings];
-  if (reliable && !messages.length) messages.push("此期間資料完整：無缺漏快照、無部分估值、無待裁定現金事件。");
+  if (reliable && !messages.length) messages.push("此期間資料完整：無缺漏快照、無部分估值，且每筆事件的現金流都可分類。");
   renderMessages(elements.perfCoverage, messages);
   elements.perfCoverage.hidden = false;
 
@@ -647,15 +643,11 @@ function renderClassifications(profiles) {
   elements.qClassified.textContent = `${classified} / ${profiles.length}`;
 }
 
-// A badge that asks for action must be reserved for events where action is possible. A migrated
-// trade carries no cash leg, so its missing settlement linkage moves no money and can never be
-// recovered -- flagging it as pending would be a to-do nobody could ever complete, which teaches
-// people to ignore the badge that does matter.
+// A badge that asks for action must be reserved for events where action is possible. Every event
+// now enters through the journal, so the only open question left is a flow nobody can classify.
 function statusBadge(event) {
-  if (!event.is_unlinked_legacy) return badge("已入帳", "badge--internal");
-  if (event.flow_is_manual) return badge("已裁定", "badge--internal");
-  if (event.flow_classification === "unknown") return badge("待裁定", "badge--unknown");
-  return badge("遷移紀錄", "badge--none");
+  if (event.flow_classification === "unknown") return badge("待確認", "badge--unknown");
+  return badge("已入帳", "badge--internal");
 }
 
 function renderJournal(page) {
@@ -668,8 +660,6 @@ function renderJournal(page) {
     const [label, className] = FLOW_LABELS[event.flow_classification] ?? ["—", "badge--none"];
     const flow = element("div", "instrument");
     flow.append(badge(label, className));
-    // A ruled event is no longer an open question, so say which reading is in force.
-    if (event.flow_is_manual) flow.append(element("span", "instrument__name", "人工裁定"));
     row.append(createCell(flow));
     row.append(createCell(event.source_reference || event.source || "—"));
     row.append(createCell(statusBadge(event)));
@@ -688,7 +678,7 @@ async function loadQuality() {
   ]);
 
   renderJournal(journal);
-  elements.qUnruled.textContent = String(performance.coverage.unruled_legacy_events);
+  elements.qUnruled.textContent = String(performance.coverage.unclassified_flow_events);
   const built = history.snapshots.length;
   const missing = history.missing_dates.length;
   elements.qCoverage.textContent = `${built} / ${built + missing}`;
@@ -702,8 +692,8 @@ async function loadQuality() {
   renderClassifications(profiles.filter(Boolean));
 
   const messages = [];
-  if (performance.coverage.unruled_legacy_events) {
-    messages.push(`${performance.coverage.unruled_legacy_events} 筆遷移現金事件尚未裁定為外部資金或投資組合活動，會使 TWR 與 XIRR 失真。執行 portfolio-admin review-flows 檢視。`);
+  if (performance.coverage.unclassified_flow_events) {
+    messages.push(`${performance.coverage.unclassified_flow_events} 筆事件無法判定屬於投資人資金或投資組合活動，其現金不計入任何一方，TWR 與 XIRR 因此建立在不完整的基礎上。`);
   }
   if (missing) messages.push(`${missing} 日缺少估值快照，績效區間會跨過這些日子。`);
   renderMessages(elements.qualityWarnings, messages);

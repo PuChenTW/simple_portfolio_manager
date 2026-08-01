@@ -348,34 +348,6 @@ def test_an_exited_position_is_not_carried_into_later_snapshots(session, held, p
     assert snapshot.cash_value == Decimal("22000")
 
 
-def test_snapshot_carries_the_legacy_gap_forward(session, harness, provider) -> None:
-    """A portfolio built from migrated rows must not present as fully reconciled."""
-    from portfolio_manager.backfill import backfill_portfolio
-    from portfolio_manager.models import Portfolio
-
-    portfolio_id = harness.portfolio()
-    harness.client.post(
-        f"/api/v1/portfolios/{portfolio_id}/cash-transactions",
-        json={"request_id": "c-1", "action": "deposit", "amount": "10000"},
-    )
-    harness.client.post(
-        f"/api/v1/portfolios/{portfolio_id}/trades",
-        json={
-            "request_id": "t-1",
-            "ticker": "AAPL",
-            "side": "buy",
-            "quantity": "10",
-            "unit_price": "100",
-        },
-    )
-    backfill_portfolio(session, session.get(Portfolio, portfolio_id))
-    session.commit()
-
-    snapshot = create_snapshot(session, portfolio_id, datetime.now(UTC).date(), provider)
-    assert snapshot.has_unlinked_legacy_events is True
-    assert any("has not been inferred" in w for w in snapshot_warnings(snapshot))
-
-
 def test_rebuild_covers_every_day_in_the_range(session, held, provider) -> None:
     report = rebuild_snapshots(session, held, BUY_DATE, LATER, provider)
 

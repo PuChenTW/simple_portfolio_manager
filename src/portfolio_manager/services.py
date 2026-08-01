@@ -6,7 +6,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -22,18 +22,14 @@ from .market import (
 )
 from .models import (
     CashBalance,
-    CashTransaction,
     Instrument,
     Portfolio,
     Position,
     PositionTag,
     QuoteCache,
-    Trade,
 )
 from .schemas import (
-    CashAction,
     CashPositionRead,
-    CashTransactionCreate,
     IndicatorsRead,
     MarketInstrumentRead,
     PortfolioCreate,
@@ -42,8 +38,6 @@ from .schemas import (
     PositionRead,
     QuoteRead,
     TechnicalSnapshotRead,
-    TradeCreate,
-    TradeSide,
     utc_now,
 )
 from .technical import bars_frame, calculate_technical, event_metrics, relative_returns
@@ -394,167 +388,6 @@ def market_response(state: MarketState) -> MarketInstrumentRead:
     )
 
 
-def _trade_fingerprint(data: TradeCreate) -> str:
-    payload: dict[str, object] = {
-        "ticker": data.ticker,
-        "side": data.side.value,
-        "quantity": _decimal_string(data.quantity),
-        "unit_price": _decimal_string(data.unit_price),
-        "fee": _decimal_string(data.fee),
-    }
-    if "executed_at" in data.model_fields_set and data.executed_at is not None:
-        payload["executed_at"] = _aware(data.executed_at).isoformat()
-    return _fingerprint(payload)
-
-
-def create_trade(
-    session: Session,
-    market: MarketService,
-    portfolio_id: str,
-    data: TradeCreate,
-) -> Trade:
-    portfolio = get_portfolio(session, portfolio_id)
-    fingerprint = _trade_fingerprint(data)
-    existing = session.scalar(
-        select(Trade).where(
-            Trade.portfolio_id == portfolio_id, Trade.request_id == data.request_id
-        )
-    )
-    if existing is not None:
-        if existing.request_fingerprint == fingerprint:
-            return existing
-        raise DomainError(
-            409,
-            "idempotency_conflict",
-            "request_id was already used with different trade data",
-            {"request_id": data.request_id},
-        )
-
-    market_state = market.get(data.ticker)
-    instrument = market_state.instrument
-    if instrument.currency != portfolio.base_currency:
-        raise DomainError(
-            422,
-            "currency_mismatch",
-            "Instrument currency must match the portfolio base currency",
-            {
-                "ticker": instrument.ticker,
-                "instrument_currency": instrument.currency,
-                "portfolio_currency": portfolio.base_currency,
-            },
-        )
-
-    position = session.get(Position, (portfolio_id, instrument.ticker))
-    if position is None:
-        position = Position(
-            portfolio_id=portfolio_id,
-            ticker=instrument.ticker,
-            quantity=ZERO,
-            average_cost=ZERO,
-            realized_pnl=ZERO,
-            updated_at=utc_now(),
-        )
-        session.add(position)
-
-    if data.side == TradeSide.BUY:
-        new_quantity = position.quantity + data.quantity
-        total_cost = position.quantity * position.average_cost
-        total_cost += data.quantity * data.unit_price + data.fee
-        position.quantity = new_quantity
-        position.average_cost = total_cost / new_quantity
-    else:
-        if data.quantity > position.quantity:
-            raise DomainError(
-                422,
-                "insufficient_position",
-                "Sell quantity exceeds the current position",
-                {"available": str(position.quantity), "requested": str(data.quantity)},
-            )
-        position.realized_pnl += data.quantity * (data.unit_price - position.average_cost)
-        position.realized_pnl -= data.fee
-        position.quantity -= data.quantity
-        if position.quantity == ZERO:
-            position.average_cost = ZERO
-    position.updated_at = utc_now()
-
-    trade = Trade(
-        id=str(uuid4()),
-        portfolio_id=portfolio_id,
-        request_id=data.request_id,
-        request_fingerprint=fingerprint,
-        ticker=instrument.ticker,
-        side=data.side.value,
-        quantity=data.quantity,
-        unit_price=data.unit_price,
-        fee=data.fee,
-        executed_at=_aware(data.executed_at) if data.executed_at else utc_now(),
-        created_at=utc_now(),
-    )
-    session.add(trade)
-    session.commit()
-    return trade
-
-
-def _cash_fingerprint(data: CashTransactionCreate) -> str:
-    payload: dict[str, object] = {
-        "action": data.action.value,
-        "amount": _decimal_string(data.amount),
-    }
-    if "occurred_at" in data.model_fields_set and data.occurred_at is not None:
-        payload["occurred_at"] = _aware(data.occurred_at).isoformat()
-    return _fingerprint(payload)
-
-
-def create_cash_transaction(
-    session: Session, portfolio_id: str, data: CashTransactionCreate
-) -> CashTransaction:
-    get_portfolio(session, portfolio_id)
-    fingerprint = _cash_fingerprint(data)
-    existing = session.scalar(
-        select(CashTransaction).where(
-            CashTransaction.portfolio_id == portfolio_id,
-            CashTransaction.request_id == data.request_id,
-        )
-    )
-    if existing is not None:
-        if existing.request_fingerprint == fingerprint:
-            return existing
-        raise DomainError(
-            409,
-            "idempotency_conflict",
-            "request_id was already used with different cash transaction data",
-            {"request_id": data.request_id},
-        )
-
-    balance = session.get(CashBalance, portfolio_id)
-    if balance is None:
-        balance = CashBalance(portfolio_id=portfolio_id, amount=ZERO, updated_at=utc_now())
-        session.add(balance)
-    if data.action == CashAction.WITHDRAW and data.amount > balance.amount:
-        raise DomainError(
-            422,
-            "insufficient_cash",
-            "Withdrawal exceeds the available cash balance",
-            {"available": str(balance.amount), "requested": str(data.amount)},
-        )
-    balance.amount += data.amount if data.action == CashAction.DEPOSIT else -data.amount
-    balance.updated_at = utc_now()
-
-    transaction = CashTransaction(
-        id=str(uuid4()),
-        portfolio_id=portfolio_id,
-        request_id=data.request_id,
-        request_fingerprint=fingerprint,
-        action=data.action.value,
-        amount=data.amount,
-        occurred_at=_aware(data.occurred_at) if data.occurred_at else utc_now(),
-        created_at=utc_now(),
-    )
-    session.add(transaction)
-    session.commit()
-    return transaction
-
-
 def normalize_tag(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value).strip().casefold()
     if not normalized or len(normalized) > 50:
@@ -695,13 +528,3 @@ def build_summary(
         valuation_as_of=utc_now(),
         warnings=list(dict.fromkeys(warnings)),
     )
-
-
-def page_total(
-    session: Session,
-    model: type[Trade] | type[CashTransaction],
-    portfolio_id: str,
-) -> int:
-    return session.scalar(
-        select(func.count()).select_from(model).where(model.portfolio_id == portfolio_id)
-    ) or 0

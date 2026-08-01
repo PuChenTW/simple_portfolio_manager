@@ -18,19 +18,15 @@ Data-transparency modules build on that core. `taxonomy.py` holds the asset-clas
 security-type vocabulary plus provenance ranking; `identity.py` resolves stable instrument IDs,
 issuer mapping, and classification precedence. `journal.py` defines event and leg vocabulary with
 the balance validator, `postings.py` performs atomic posting and reversal, and
-`corporate_actions.py` records, previews, and applies issuer events. `backfill.py` migrates legacy
-rows into the journal and is exposed through `cli.py`.
+`corporate_actions.py` records, previews, and applies issuer events.
 
 Historical valuation builds on the journal. `replay.py` rebuilds positions, cash, and flow
 totals at any cutoff by folding journal legs, and is the only correct source of past state --
 `positions` and `cash_balances` describe the present. `valuation.py` prices a replayed state
 with history bounded by the valuation date and stores it as a snapshot, plus the re-runnable
-range rebuild behind `portfolio-admin rebuild-snapshots`. `flows.py` holds manual rulings on
-whether a migrated cash movement was investor capital or portfolio activity; the pre-journal
-model could not distinguish them, and replay reads an active ruling in place of the value
-derived from the event type. `performance.py` computes TWR and XIRR from stored snapshots and
-journal flows, and reports the coverage behind them: only unruled *cash* events bias a return,
-so migrated trades (which carry no cash leg) are counted separately and do not raise an alarm.
+range rebuild behind `portfolio-admin rebuild-snapshots`. `performance.py` computes TWR and XIRR
+from stored snapshots and journal flows, and reports the coverage behind them: a gap, a partial
+valuation, or an event whose cash flow cannot be classified each makes a return unreliable.
 `fx.py` resolves point-in-time exchange rates -- direct, inverted, or crossed -- and stores every
 observation so a conversion can be audited; `consolidation.py` groups portfolios and expresses
 their holdings in one reporting currency, keeping each local figure beside its converted one.
@@ -42,14 +38,8 @@ their holdings in one reporting currency, keeping each local figure beside its c
 - `uv run portfolio-manager`: run the API at `http://127.0.0.1:8001`.
 - `uv run portfolio-mcp`: run the MCP server (stdio; needs the API running). Set
   `PORTFOLIO_MCP_TRANSPORT=streamable-http` for the HTTP transport.
-- `uv run portfolio-admin backfill-journal`: migrate legacy trades and cash into journal events.
-- `uv run portfolio-admin verify-journal <portfolio_id>`: compare stored cash against the journal.
 - `uv run portfolio-admin rebuild-snapshots <portfolio_id> <start> <end>`: build daily valuation
   snapshots over a date range. Safe to re-run; existing dates are skipped.
-- `uv run portfolio-admin review-flows <portfolio_id>`: list migrated cash events awaiting a
-  ruling on whether they crossed the portfolio boundary, with the evidence for each suggestion.
-- `uv run portfolio-admin set-flow <event_id> <external|internal> --reason "..."`: record that
-  ruling. `--retract` withdraws it and restores the derived value.
 - `uv run pytest`: run deterministic tests; live Yahoo tests are skipped.
 - `uv run pytest -m external`: exercise `AAPL`, `2330.TW`, and `BTC-USD` online.
 - `uv run ruff check .`: enforce imports and Python style.
@@ -70,20 +60,21 @@ SQLite database and fake market provider from `conftest.py`; normal tests must n
 access. Add regression tests for accounting formulas, idempotency, error codes, migrations, and
 OpenAPI changes. Run both pytest and Ruff before submitting changes.
 
-`tests/legacy_api_baseline.json` freezes the 15 operations, 33 response models, and 15 MCP tools
-that existed before the identity and journal work. Adding to the surface is fine; changing or
-removing anything in the baseline fails `test_backward_compatibility.py` and requires an explicit
-version bump rather than a regenerated baseline. `test_migrations.py` additionally asserts that
+`tests/legacy_api_baseline.json` freezes the 32 operations, 67 response models, and 32 MCP tools
+published at version 0.2.0. Adding to the surface is fine; changing or removing anything in the
+baseline fails `test_backward_compatibility.py` and requires an explicit version bump rather than
+a regenerated baseline. Version 0.2.0 was such a bump: it removed the pre-journal `record_trade`
+and `record_cash_transaction` ledgers, whose position and cash writes were independent and could
+disagree. `record_transaction` is now the only write path. `test_migrations.py` additionally asserts that
 the migrated schema matches the ORM models, since the test harness builds tables from the ORM
 while production runs Alembic. `test_mcp_server.py` asserts every API operation has a matching
 MCP tool, so adding an endpoint without its tool fails the suite rather than shipping a surface
 agents cannot reach.
 
 A warning nobody can ever clear is worse than no warning: it teaches readers to ignore the ones
-that matter. Before reporting a gap, check whether the user can actually act on it -- migrated
-trades carry no cash leg, so their missing settlement linkage is a permanent fact about the data,
-not an open task, and it is counted separately from the unruled cash events that genuinely bias a
-return.
+that matter. Before reporting a gap, check whether the user can actually act on it, and whether it
+actually changes a number. A permanent fact about the data is not an open task, and it belongs in
+a different count from the gaps that genuinely bias a result.
 
 ## Commit & Pull Request Guidelines
 
@@ -105,7 +96,7 @@ a value this service cannot determine is reported as undetermined, because an in
 indistinguishable from a real one once written.
 
 1. **Never guess.** A classification, cost allocation, or trade-to-cash linkage that cannot be
-   determined stays `unclassified`, `unresolved`, or `unlinked_legacy` with a warning. An invented
+   determined stays `unclassified` or `unresolved` with a warning. An invented
    value is indistinguishable from a real one once written and silently corrupts everything
    derived from it.
 2. **Never overwrite provenance.** A manual override outranks a provider value rather than

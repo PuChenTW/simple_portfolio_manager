@@ -9,6 +9,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import select
 
 from portfolio_manager.errors import DomainError
 from portfolio_manager.journal import EventType
@@ -303,65 +304,74 @@ def test_a_gap_in_the_series_is_reported(session, harness, provider) -> None:
     assert any("no snapshot" in warning for warning in result.coverage.warnings)
 
 
-def test_an_unruled_legacy_event_makes_the_result_unreliable(session, harness, provider) -> None:
-    """Migrated cash of unknown meaning biases both measures; the caller must be told."""
-    from portfolio_manager.backfill import backfill_portfolio
-    from portfolio_manager.models import Portfolio
+def test_an_unclassifiable_flow_makes_the_result_unreliable(session, harness, provider) -> None:
+    """Cash that lands in neither the capital base nor the return biases both measures.
+
+    A reversal is classified by the event it undoes. When that original is not in the replay --
+    here, an id that resolves to nothing -- the type gives no answer, and the honest report is
+    that the period could not be measured cleanly rather than a number that looks settled.
+    """
+    from portfolio_manager.models import JournalEvent
 
     portfolio_id = harness.portfolio()
     harness.client.post(
-        f"/api/v1/portfolios/{portfolio_id}/cash-transactions",
+        f"/api/v1/portfolios/{portfolio_id}/transactions",
         json={
             "request_id": "c-1",
-            "action": "deposit",
+            "transaction_type": "deposit",
             "amount": "1000",
             "occurred_at": at(DAY0).isoformat(),
         },
     )
-    backfill_portfolio(session, session.get(Portfolio, portfolio_id))
+    # Make the event unclassifiable the way an orphaned reversal is: a type nothing resolves.
+    event = session.scalars(select(JournalEvent)).one()
+    event.event_type = "not_a_known_type"
     session.commit()
+
     for offset in range(2):
         create_snapshot(session, portfolio_id, DAY0 + timedelta(days=offset), provider)
 
     result = calculate_performance(session, portfolio_id, DAY0, DAY0 + timedelta(days=1))
 
-    assert result.coverage.unruled_legacy_events >= 1
+    assert result.coverage.unclassified_flow_events >= 1
     assert result.coverage.is_reliable is False
-    assert any("no ruling" in warning for warning in result.coverage.warnings)
+    assert any("could not be classified" in warning for warning in result.coverage.warnings)
 
 
-def test_migrated_trades_alone_do_not_make_a_result_unreliable(
-    session, harness, provider
-) -> None:
-    """A warning nobody can ever clear teaches people to ignore warnings.
+def test_a_fully_journaled_portfolio_reports_no_flow_gaps(session, harness, provider) -> None:
+    """A warning nobody can ever clear teaches people to ignore the ones that matter.
 
-    Migrated trades have no cash leg, so their missing settlement linkage cannot skew a
-    flow-based return. Only unruled *cash* movements can, and those are the ones flagged.
+    Every event posted through the journal carries a type that classifies itself, so an ordinary
+    portfolio must come back clean rather than carrying a permanent caveat.
     """
-    from portfolio_manager.backfill import backfill_portfolio
-    from portfolio_manager.models import Portfolio
-
     portfolio_id = harness.portfolio()
     harness.client.get("/api/v1/market/instruments/AAPL")
     harness.client.post(
-        f"/api/v1/portfolios/{portfolio_id}/trades",
+        f"/api/v1/portfolios/{portfolio_id}/transactions",
         json={
-            "request_id": "t-1",
-            "ticker": "AAPL",
-            "side": "buy",
-            "quantity": "10",
-            "unit_price": "100",
-            "executed_at": at(DAY0).isoformat(),
+            "request_id": "c-1",
+            "transaction_type": "deposit",
+            "amount": "5000",
+            "occurred_at": at(DAY0).isoformat(),
         },
     )
-    backfill_portfolio(session, session.get(Portfolio, portfolio_id))
-    session.commit()
+    harness.client.post(
+        f"/api/v1/portfolios/{portfolio_id}/transactions",
+        json={
+            "request_id": "t-1",
+            "transaction_type": "buy",
+            "ticker": "AAPL",
+            "quantity": "10",
+            "unit_price": "100",
+            "occurred_at": at(DAY0).isoformat(),
+        },
+    )
     for offset in range(2):
         create_snapshot(session, portfolio_id, DAY0 + timedelta(days=offset), provider)
 
     result = calculate_performance(session, portfolio_id, DAY0, DAY0 + timedelta(days=1))
 
-    assert result.coverage.unruled_legacy_events == 0, "a cashless trade has no flow to rule on"
+    assert result.coverage.unclassified_flow_events == 0
     assert result.coverage.is_reliable, "nothing here biases the return"
 
 

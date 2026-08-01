@@ -1,13 +1,18 @@
-"""The pre-existing API and MCP surface must never change.
+"""The published API and MCP surface must not change without a version bump.
 
-`legacy_api_baseline.json` is a frozen capture of the 15 operations, 33 response models, and 15
-MCP tools as they existed at commit 59b554e, before instrument identity and the journal were
-added. Agents and generated clients are built against that contract, so a change here breaks
-callers that cannot be updated in lockstep.
+`legacy_api_baseline.json` is a frozen capture of the 32 operations, 67 response models, and 32
+MCP tools published at version 0.2.0. Agents and generated clients are built against that
+contract, so a change here breaks callers that cannot be updated in lockstep.
 
 Adding operations, models, or tools is fine and expected. Changing or removing an existing one is
 not: it needs an explicit version bump, not a passing test suite. Regenerate this baseline only
 when deliberately shipping a breaking change.
+
+0.2.0 was one such change. It removed `record_trade`, `list_trades`, `record_cash_transaction`,
+and `list_cash_transactions` along with their tables. Those were independent ledgers: a buy moved
+the position without touching cash, so the two could disagree and nothing recorded which was
+right. `record_transaction` is now the only write path, and it posts a position and its settlement
+in one transaction or not at all.
 """
 
 import asyncio
@@ -79,28 +84,34 @@ def test_legacy_mcp_tools_keep_their_signatures() -> None:
         assert tools[name] == schema, f"MCP tool {name} changed its input signature"
 
 
-def test_record_trade_still_leaves_cash_untouched(harness) -> None:
-    """The legacy semantic that motivated the journal must itself stay unchanged.
+def test_the_baseline_matches_the_declared_version(operations) -> None:
+    """A regenerated baseline without a version bump is the failure this file exists to catch."""
+    assert app.openapi()["info"]["version"] == BASELINE["version"]
 
-    `record_trade` deliberately does not move cash. Changing that would silently restate every
-    portfolio built on it, so the new atomic path was added alongside rather than replacing it.
+
+def test_recording_a_purchase_moves_cash_and_position_together(harness) -> None:
+    """The invariant that replaced the legacy ledgers.
+
+    The removed `record_trade` deliberately left cash untouched, which let a portfolio's position
+    and cash disagree with nothing recording which was right. Every write now settles atomically.
     """
     portfolio_id = harness.portfolio()
+    endpoint = f"/api/v1/portfolios/{portfolio_id}/transactions"
     harness.client.post(
-        f"/api/v1/portfolios/{portfolio_id}/cash-transactions",
-        json={"request_id": "c-1", "action": "deposit", "amount": "10000"},
+        endpoint,
+        json={"request_id": "c-1", "transaction_type": "deposit", "amount": "10000"},
     )
     harness.client.post(
-        f"/api/v1/portfolios/{portfolio_id}/trades",
+        endpoint,
         json={
             "request_id": "t-1",
+            "transaction_type": "buy",
             "ticker": "AAPL",
-            "side": "buy",
             "quantity": "10",
             "unit_price": "140",
         },
     )
 
     summary = harness.client.get(f"/api/v1/portfolios/{portfolio_id}/summary").json()
-    assert summary["cash_value"] == "10000", "record_trade must not deduct cash"
+    assert summary["cash_value"] == "8600", "the purchase settled against cash"
     assert summary["positions"][0]["quantity"] == "10"

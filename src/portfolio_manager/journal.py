@@ -129,6 +129,18 @@ def classify_flow(event_type: EventType) -> FlowClassification:
     return FlowClassification.UNKNOWN
 
 
+def derived_flow(event_type: str) -> FlowClassification:
+    """Classify a stored event type, which is a plain string on the row.
+
+    An unrecognized value stays UNKNOWN rather than defaulting to either side: a flow guessed
+    wrong is silently absorbed into the capital base or the return, and neither is recoverable.
+    """
+    try:
+        return classify_flow(EventType(event_type))
+    except ValueError:
+        return FlowClassification.UNKNOWN
+
+
 @dataclass
 class Leg:
     """One side of an event, in the currency named on the leg."""

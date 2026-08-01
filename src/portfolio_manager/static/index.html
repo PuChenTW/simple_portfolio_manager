@@ -184,7 +184,7 @@
             <span class="metric__detail">可稽核的原子化紀錄</span>
           </article>
           <article class="metric">
-            <p>待裁定現金事件</p>
+            <p>無法分類的現金流</p>
             <strong id="q-unruled">—</strong>
             <span class="metric__detail">影響 TWR / XIRR</span>
           </article>
@@ -235,9 +235,10 @@
             <span id="journal-count" class="muted"></span>
           </div>
           <p class="panel__note">
-            標記「遷移紀錄」的是舊系統轉入的交易。舊模型的交易與現金是兩本獨立的帳，從未記錄哪筆現金
-            結算哪筆交易，因此該關聯無法還原，也沒有被猜測。這些事件不含現金分錄，不影響現金餘額與報酬
-            計算，無需處理。真正需要你判斷的現金事件會標記為「待裁定」。
+            每一筆事件都是原子化入帳：證券、現金、手續費、稅金的分錄同時成立或同時不成立，因此部位
+            不可能在沒有對應現金的情況下變動。更正只能用反向沖銷，不會修改或刪除原始紀錄。標記
+            「待確認」的事件無法判定屬於投資人資金或投資組合活動，其現金不計入任何一方，會使 TWR
+            與 XIRR 建立在不完整的基礎上。
           </p>
           <div class="table-wrapper">
             <table>
