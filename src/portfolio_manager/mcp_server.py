@@ -762,6 +762,83 @@ async def get_portfolio_performance(
     )
 
 
+@mcp.tool()
+async def create_portfolio_group(
+    name: str,
+    reporting_currency: str,
+    portfolio_ids: list[str],
+) -> dict[str, Any]:
+    """Group portfolios so they can be reported together in one currency.
+
+    Use this when the user holds assets in several currencies -- a USD account and a TWD account,
+    say -- and wants one combined view. The portfolios stay independent single-currency ledgers;
+    grouping only affects reporting and changes nothing about them.
+
+    Membership starts at each portfolio's own inception, so a group created now can immediately
+    report on history that already exists.
+    """
+    payload = {
+        "name": name,
+        "reporting_currency": reporting_currency,
+        "portfolio_ids": portfolio_ids,
+    }
+    return await _request("POST", "/api/v1/portfolio-groups", json=payload)
+
+
+@mcp.tool()
+async def get_portfolio_group(group_id: str) -> dict[str, Any]:
+    """Read a group's name, reporting currency, and current members."""
+    return await _request("GET", f"/api/v1/portfolio-groups/{group_id}")
+
+
+@mcp.tool()
+async def update_portfolio_group_members(
+    group_id: str, portfolio_ids: list[str]
+) -> dict[str, Any]:
+    """Replace which portfolios belong to a group.
+
+    Pass the complete desired membership, not just additions. A portfolio removed here keeps its
+    historical membership, so reports for earlier dates still include it; membership can never be
+    edited in a way that restates a past consolidation.
+    """
+    return await _request(
+        "PUT",
+        f"/api/v1/portfolio-groups/{group_id}/members",
+        json={"portfolio_ids": portfolio_ids},
+    )
+
+
+@mcp.tool()
+async def get_consolidated_summary(
+    group_id: str,
+    as_of: str | None = None,
+    reporting_currency: str | None = None,
+) -> dict[str, Any]:
+    """Total a group's holdings and cash across currencies.
+
+    This is the tool for "what am I worth in total" when holdings span currencies. Each portfolio
+    is valued in its own currency and converted at the rate in force on `as_of` (`YYYY-MM-DD`,
+    defaulting to today); rates never come from after that date. Every position keeps its local
+    figure alongside the converted one, plus the rate, the conversion path, and the rate's date.
+
+    Before quoting `total_value`, check `converted_value_coverage_percent` and `unconverted`.
+    Value whose currency pair could not be resolved is excluded from the total rather than
+    converted at a guessed rate, so the total can legitimately understate the group -- those two
+    fields are the only way to see by how much. Report that shortfall rather than the total alone.
+
+    `issuer_exposure` combines listings of the same company, so an ADR and its local line read as
+    one economic exposure while remaining separate positions.
+    """
+    params: dict[str, Any] = {}
+    if as_of is not None:
+        params["as_of"] = as_of
+    if reporting_currency is not None:
+        params["reporting_currency"] = reporting_currency
+    return await _request(
+        "GET", f"/api/v1/portfolio-groups/{group_id}/summary", params=params
+    )
+
+
 def main() -> None:
     transport = os.getenv("PORTFOLIO_MCP_TRANSPORT", "stdio")
     if transport == "streamable-http":

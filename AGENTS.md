@@ -29,6 +29,9 @@ model could not distinguish them, and replay reads an active ruling in place of 
 derived from the event type. `performance.py` computes TWR and XIRR from stored snapshots and
 journal flows, and reports the coverage behind them: only unruled *cash* events bias a return,
 so migrated trades (which carry no cash leg) are counted separately and do not raise an alarm.
+`fx.py` resolves point-in-time exchange rates -- direct, inverted, or crossed -- and stores every
+observation so a conversion can be audited; `consolidation.py` groups portfolios and expresses
+their holdings in one reporting currency, keeping each local figure beside its converted one.
 
 ## Build, Test, and Development Commands
 
@@ -97,7 +100,11 @@ Three invariants govern the data-transparency work and must not be weakened:
    replacing it, so retracting the override restores the original.
 3. **Never post half an event.** Legs and their position/cash projections commit in one
    transaction, and posted events are corrected by reversal, never by edit or delete.
-4. **Never value a date with a later price.** Snapshots replay the journal to the cutoff and
+4. **Never convert at a guessed rate.** A currency pair that cannot be resolved leaves the
+   amount in its own currency, excluded from the converted total and listed in `unconverted`
+   with the coverage percentage. A total that quietly omitted it would look complete and be
+   wrong. Rates never come from after the report date, and every conversion reports its path.
+5. **Never value a date with a later price.** Snapshots replay the journal to the cutoff and
    price it from history bounded by that date. A holding with no price on or before the date is
    excluded from `securities_value`, carried at cost in `unpriced_market_value`, and makes the
    snapshot `partial`; a missing date in a series is reported, never interpolated.

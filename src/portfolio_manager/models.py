@@ -345,6 +345,77 @@ class CorporateActionApplication(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class PortfolioGroup(Base):
+    """A set of portfolios reported together in one currency."""
+
+    __tablename__ = "portfolio_groups"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    reporting_currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PortfolioGroupMember(Base):
+    """One portfolio's membership of a group over a period.
+
+    Membership is effective-dated and never deleted. Removing a portfolio closes its interval, so
+    a report for last month still contains the portfolios that were in the group last month --
+    editing membership in place would silently restate history.
+    """
+
+    __tablename__ = "portfolio_group_members"
+    __table_args__ = (
+        UniqueConstraint(
+            "group_id", "portfolio_id", "effective_from", name="uq_group_member_interval"
+        ),
+        Index("ix_group_members_group", "group_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    group_id: Mapped[str] = mapped_column(
+        ForeignKey("portfolio_groups.id", ondelete="CASCADE"), nullable=False
+    )
+    portfolio_id: Mapped[str] = mapped_column(
+        ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False
+    )
+    effective_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    effective_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class FxRate(Base):
+    """One observed exchange rate, kept so a conversion can be audited or reproduced.
+
+    Storing only converted totals would make a report impossible to check: the rate that produced
+    it would be gone. `price_as_of` is the rate's own date, which is what bounds a historical
+    conversion; `fetched_at` records when it was retrieved.
+    """
+
+    __tablename__ = "fx_rates"
+    __table_args__ = (
+        UniqueConstraint(
+            "base_currency",
+            "quote_currency",
+            "price_as_of",
+            "provider",
+            name="uq_fx_rate_observation",
+        ),
+        Index("ix_fx_rates_pair_date", "base_currency", "quote_currency", "price_as_of"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    base_currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    quote_currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    rate: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
+    price_as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    provider: Mapped[str] = mapped_column(String(60), nullable=False)
+    provider_symbol: Mapped[str | None] = mapped_column(String(30))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class EventFlowClassification(Base):
     """A human ruling on what an event's cash movement means for performance.
 

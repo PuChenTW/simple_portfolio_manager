@@ -1064,6 +1064,121 @@ class PerformanceRead(ApiModel):
     daily_returns: list[DailyReturnRead]
 
 
+class GroupCreate(ApiModel):
+    """Request to report several portfolios together."""
+
+    name: str
+    reporting_currency: str = Field(description="ISO code the group's totals are expressed in.")
+    portfolio_ids: list[str]
+
+
+class GroupMembersUpdate(ApiModel):
+    """Replace a group's membership."""
+
+    portfolio_ids: list[str]
+
+
+class GroupRead(ApiModel):
+    """A group and the portfolios currently in it."""
+
+    id: str
+    name: str
+    reporting_currency: str
+    portfolio_ids: list[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+class FxRateRead(ApiModel):
+    """One rate used in a conversion, with how it was derived."""
+
+    base_currency: str
+    quote_currency: str
+    rate: Decimal
+    method: str = Field(description="identity, direct, inverse, or cross.")
+    conversion_path: list[str] = Field(
+        description="The currencies traversed, e.g. ['TWD', 'USD', 'EUR'] for a cross."
+    )
+    price_as_of: datetime | None
+    provider: str | None
+    is_stale: bool
+    warnings: list[str]
+
+
+class ConsolidatedPositionRead(ApiModel):
+    """One holding in both its own currency and the reporting currency."""
+
+    portfolio_id: str
+    portfolio_name: str
+    instrument_id: str | None
+    ticker: str
+    issuer_id: str | None
+    quantity: Decimal
+    average_cost: Decimal
+    local_currency: str
+    local_price: Decimal | None
+    local_market_value: Decimal | None
+    reporting_market_value: Decimal | None = Field(
+        description="Null when the currency could not be converted; never a guessed value."
+    )
+    fx_rate: Decimal | None
+    fx_method: str | None
+    fx_path: list[str]
+    fx_as_of: datetime | None
+    weight_percent: Decimal | None
+    warnings: list[str]
+
+
+class CurrencyTotalRead(ApiModel):
+    currency: str
+    local_amount: Decimal
+    reporting_amount: Decimal | None
+
+
+class IssuerExposureRead(ApiModel):
+    """Exposure to one issuer across every listing and portfolio in the group."""
+
+    issuer_id: str
+    issuer_name: str
+    reporting_value: Decimal
+    weight_percent: Decimal | None
+    tickers: list[str]
+
+
+class UnconvertedAmountRead(ApiModel):
+    """Value excluded from the totals because its currency could not be converted."""
+
+    currency: str
+    amount: Decimal
+    reason: str
+
+
+class ConsolidatedSummaryRead(ApiModel):
+    """A group's holdings and cash expressed in one currency."""
+
+    group_id: str
+    group_name: str
+    reporting_currency: str
+    as_of: date
+    portfolio_ids: list[str]
+    positions: list[ConsolidatedPositionRead]
+    cash_by_currency: list[CurrencyTotalRead]
+    currency_exposure: list[CurrencyTotalRead]
+    issuer_exposure: list[IssuerExposureRead]
+    securities_value: Decimal
+    cash_value: Decimal
+    total_value: Decimal = Field(
+        description="Converted value only. Anything in `unconverted` is excluded from this."
+    )
+    unconverted: list[UnconvertedAmountRead]
+    converted_value_coverage_percent: Decimal = Field(
+        description="Share of gross value that reached the reporting currency."
+    )
+    fx_rates_used: list[FxRateRead]
+    calculation_method: str
+    warnings: list[str]
+
+
 class ErrorResponse(ApiModel):
     """Stable machine-readable error envelope used for validation and domain failures."""
 

@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Decimal
 from enum import StrEnum
 from typing import Protocol
 
@@ -106,6 +106,31 @@ def _decimal(value: object) -> Decimal | None:
     if value is None or pd.isna(value):
         return None
     return Decimal(str(value))
+
+
+# yfinance returns daily bars as float32, so a close of 117.58 arrives as 117.58000183105469 and
+# an FX rate of 32.395 as 32.39500045776367. Those digits are the float32 round-trip, not data:
+# the type carries only about seven significant decimal digits. Rounding there recovers what the
+# provider meant, while storing the raw value would make every derived figure look more precise
+# than its source.
+PROVIDER_SIGNIFICANT_DIGITS = 7
+
+
+def clean_provider_value(value: Decimal) -> Decimal:
+    """Strip float32 residue from a provider price or rate.
+
+    Significant figures rather than decimal places: the noise sits a fixed distance from the
+    leading digit, so a fixed number of places would truncate a sub-cent crypto price while
+    leaving a five-figure index level dirty.
+    """
+    if value == 0:
+        return value
+    exponent = value.adjusted()  # power of ten of the leading digit
+    quantum = Decimal(1).scaleb(exponent - (PROVIDER_SIGNIFICANT_DIGITS - 1))
+    rounded = value.quantize(quantum, rounding=ROUND_HALF_EVEN)
+    # Drop trailing zeros without ever moving to exponent form (1E+2 instead of 100).
+    trimmed = rounded.normalize()
+    return trimmed if trimmed.as_tuple().exponent <= 0 else trimmed.quantize(Decimal("1"))
 
 
 def _utc_timestamp(value: object) -> datetime:

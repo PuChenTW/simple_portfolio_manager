@@ -11,6 +11,13 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from .config import settings
+from .consolidation import (
+    build_consolidated_summary,
+    create_group,
+    get_group,
+    member_portfolio_ids,
+    replace_members,
+)
 from .corporate_actions import (
     apply_corporate_action,
     list_actions,
@@ -45,18 +52,26 @@ from .schemas import (
     CashTransactionPage,
     CashTransactionRead,
     ClassificationOverrideUpdate,
+    ConsolidatedPositionRead,
+    ConsolidatedSummaryRead,
     CorporateActionApplicationRead,
     CorporateActionApply,
     CorporateActionCreate,
     CorporateActionPage,
     CorporateActionPreview,
     CorporateActionRead,
+    CurrencyTotalRead,
     DailyReturnRead,
     ErrorResponse,
+    FxRateRead,
+    GroupCreate,
+    GroupMembersUpdate,
+    GroupRead,
     HealthRead,
     HistoryBarRead,
     HistoryRead,
     InstrumentProfileRead,
+    IssuerExposureRead,
     IssuerMappingUpdate,
     JournalEventDetail,
     JournalEventPage,
@@ -85,6 +100,7 @@ from .schemas import (
     TradeRead,
     TransactionCreate,
     TransactionReverse,
+    UnconvertedAmountRead,
     utc_now,
 )
 from .services import (
@@ -225,6 +241,15 @@ OPENAPI_TAGS = [
         ),
     },
     {
+        "name": "consolidation",
+        "description": (
+            "Report several portfolios together in one currency. Every converted figure keeps "
+            "its original alongside the rate, path, and rate date that produced it. Value whose "
+            "currency cannot be converted is excluded from the totals and reported explicitly "
+            "rather than converted at a guessed rate."
+        ),
+    },
+    {
         "name": "valuation",
         "description": (
             "Point-in-time snapshots of what a portfolio was worth. Holdings and cash are "
@@ -323,6 +348,13 @@ PortfolioId = Annotated[
     Path(
         description="Portfolio UUID returned by `create_portfolio`.",
         examples=["8b83aa9a-629f-4a40-a167-cb980724a888"],
+    ),
+]
+GroupId = Annotated[
+    str,
+    Path(
+        description="Portfolio group UUID returned by `create_portfolio_group`.",
+        examples=["3f1c2d5e-8a4b-4c6d-9e0f-1a2b3c4d5e6f"],
     ),
 ]
 TickerPath = Annotated[
@@ -1665,4 +1697,193 @@ def get_portfolio_performance(
             )
             for item in result.daily_returns
         ],
+    )
+
+
+def _group_payload(session: Session, group) -> GroupRead:
+    return GroupRead(
+        id=group.id,
+        name=group.name,
+        reporting_currency=group.reporting_currency,
+        portfolio_ids=member_portfolio_ids(session, group.id, utc_now().date()),
+        created_at=group.created_at,
+        updated_at=group.updated_at,
+    )
+
+
+@app.post(
+    "/api/v1/portfolio-groups",
+    response_model=GroupRead,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="create_portfolio_group",
+    summary="Group portfolios for combined reporting",
+    response_description="The group and its current members",
+    tags=["consolidation"],
+)
+def post_portfolio_group(data: GroupCreate, session: SessionDep) -> GroupRead:
+    """
+    Report several portfolios together in one currency.
+
+    Grouping is a reporting decision about data that already exists, so membership starts at each
+    portfolio's own inception: a group created today can immediately report on the history its
+    portfolios already have. Portfolios keep their own base currency and stay independent
+    ledgers; nothing about them changes.
+    """
+    group = create_group(session, data.name, data.reporting_currency, data.portfolio_ids)
+    return _group_payload(session, group)
+
+
+@app.get(
+    "/api/v1/portfolio-groups/{group_id}",
+    response_model=GroupRead,
+    operation_id="get_portfolio_group",
+    summary="Read a group and its members",
+    response_description="The group with the portfolios currently in it",
+    tags=["consolidation"],
+)
+def read_portfolio_group(group_id: GroupId, session: SessionDep) -> GroupRead:
+    """Read a group's metadata and the portfolios that are members today."""
+    return _group_payload(session, get_group(session, group_id))
+
+
+@app.put(
+    "/api/v1/portfolio-groups/{group_id}/members",
+    response_model=GroupRead,
+    operation_id="update_portfolio_group_members",
+    summary="Replace a group's membership",
+    response_description="The group with its updated membership",
+    tags=["consolidation"],
+)
+def put_portfolio_group_members(
+    group_id: GroupId, data: GroupMembersUpdate, session: SessionDep
+) -> GroupRead:
+    """
+    Set which portfolios belong to the group from now on.
+
+    A portfolio removed here keeps its historical membership: its interval is closed rather than
+    deleted, so a report for an earlier date still contains it. Membership can never be edited in
+    a way that silently restates a past consolidation.
+    """
+    group = replace_members(session, group_id, data.portfolio_ids)
+    return _group_payload(session, group)
+
+
+@app.get(
+    "/api/v1/portfolio-groups/{group_id}/summary",
+    response_model=ConsolidatedSummaryRead,
+    operation_id="get_consolidated_summary",
+    summary="Value a group in one currency",
+    response_description="Converted totals with the rates used and the coverage achieved",
+    tags=["consolidation"],
+)
+def get_consolidated_summary(
+    group_id: GroupId,
+    session: SessionDep,
+    provider: ProviderDep,
+    as_of: Annotated[
+        date | None, Query(description="Report date. Omit for today. Never uses later data.")
+    ] = None,
+    reporting_currency: Annotated[
+        str | None, Query(description="Override the group's own reporting currency.")
+    ] = None,
+) -> ConsolidatedSummaryRead:
+    """
+    Add up holdings and cash across currencies.
+
+    Each portfolio is valued in its own currency and then converted at the rate in force on the
+    report date; rates are never taken from after that date. Every position keeps both figures,
+    plus the rate, the path it took, and that rate's own date, so any total can be checked.
+
+    Read `converted_value_coverage_percent` and `unconverted` before using `total_value`. When a
+    currency pair cannot be resolved, the affected value is excluded from the total and listed
+    under `unconverted` rather than converted at a guessed rate -- so the total may legitimately
+    understate the group, and only these fields reveal by how much.
+    """
+    summary = build_consolidated_summary(
+        session,
+        group_id,
+        provider,
+        as_of=as_of,
+        reporting_currency=reporting_currency,
+    )
+    return ConsolidatedSummaryRead(
+        group_id=summary.group_id,
+        group_name=summary.group_name,
+        reporting_currency=summary.reporting_currency,
+        as_of=summary.as_of,
+        portfolio_ids=summary.portfolio_ids,
+        positions=[
+            ConsolidatedPositionRead(
+                portfolio_id=row.portfolio_id,
+                portfolio_name=row.portfolio_name,
+                instrument_id=row.instrument_id,
+                ticker=row.ticker,
+                issuer_id=row.issuer_id,
+                quantity=row.quantity,
+                average_cost=row.average_cost,
+                local_currency=row.local_currency,
+                local_price=row.local_price,
+                local_market_value=row.local_market_value,
+                reporting_market_value=row.reporting_market_value,
+                fx_rate=row.fx_rate,
+                fx_method=row.fx_method,
+                fx_path=row.fx_path,
+                fx_as_of=row.fx_as_of,
+                weight_percent=row.weight_percent,
+                warnings=row.warnings,
+            )
+            for row in summary.positions
+        ],
+        cash_by_currency=[
+            CurrencyTotalRead(
+                currency=item.currency,
+                local_amount=item.local_amount,
+                reporting_amount=item.reporting_amount,
+            )
+            for item in summary.cash_by_currency
+        ],
+        currency_exposure=[
+            CurrencyTotalRead(
+                currency=item.currency,
+                local_amount=item.local_amount,
+                reporting_amount=item.reporting_amount,
+            )
+            for item in summary.currency_exposure
+        ],
+        issuer_exposure=[
+            IssuerExposureRead(
+                issuer_id=item.issuer_id,
+                issuer_name=item.issuer_name,
+                reporting_value=item.reporting_value,
+                weight_percent=item.weight_percent,
+                tickers=item.tickers,
+            )
+            for item in summary.issuer_exposure
+        ],
+        securities_value=summary.securities_value,
+        cash_value=summary.cash_value,
+        total_value=summary.total_value,
+        unconverted=[
+            UnconvertedAmountRead(
+                currency=item.currency, amount=item.amount, reason=item.reason
+            )
+            for item in summary.unconverted
+        ],
+        converted_value_coverage_percent=summary.converted_value_coverage_percent,
+        fx_rates_used=[
+            FxRateRead(
+                base_currency=item.base_currency,
+                quote_currency=item.quote_currency,
+                rate=item.rate,
+                method=item.method,
+                conversion_path=item.conversion_path,
+                price_as_of=item.price_as_of,
+                provider=item.provider,
+                is_stale=item.is_stale,
+                warnings=item.warnings,
+            )
+            for item in summary.fx_rates_used
+        ],
+        calculation_method=summary.calculation_method,
+        warnings=summary.warnings,
     )

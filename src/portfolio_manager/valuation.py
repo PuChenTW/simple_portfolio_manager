@@ -19,13 +19,13 @@ import json
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
-from decimal import ROUND_HALF_EVEN, Decimal
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .errors import DomainError
-from .market import MarketDataError, MarketProvider
+from .market import MarketDataError, MarketProvider, clean_provider_value
 from .models import (
     Instrument,
     PortfolioValuationSnapshot,
@@ -44,33 +44,6 @@ STALE_PRICE_DAYS = 5
 
 HUNDRED = Decimal("100")
 
-# Yahoo's daily bars come back as float32, so a close of 117.58 reaches us as
-# 117.58000183105469 and 371.90 as 371.8999938964844. Those digits are the float32 round-trip,
-# not price information: the type carries only about 7 significant decimal digits, so anything
-# past the seventh is an artifact. Storing it would make a snapshot look far more precise than
-# the data behind it and would leave every derived figure carrying meaningless tails.
-#
-# Seven significant figures is exactly what float32 can represent, so this recovers the price
-# the provider meant rather than imposing a convention: 117.58000183105469 becomes 117.58 and
-# 371.8999938964844 becomes 371.9. Rounding to eight would keep the artifact (371.89999);
-# a price genuinely needing eight digits could not have survived float32 in the first place.
-#
-# Significant figures, not decimal places: the noise sits a fixed distance from the leading
-# digit rather than from the decimal point, so a fixed number of places would truncate small
-# prices while leaving large ones dirty. Only provider prices are treated this way --
-# quantities, costs, and cash are recorded exactly as given.
-PRICE_SIGNIFICANT_DIGITS = 7
-
-
-def _clean_price(value: Decimal) -> Decimal:
-    if value == ZERO:
-        return ZERO
-    exponent = value.adjusted()  # power of ten of the leading digit
-    quantum = Decimal(1).scaleb(exponent - (PRICE_SIGNIFICANT_DIGITS - 1))
-    rounded = value.quantize(quantum, rounding=ROUND_HALF_EVEN)
-    # Drop trailing zeros without ever moving to exponent form (1E+2 instead of 100).
-    trimmed = rounded.normalize()
-    return trimmed if trimmed.as_tuple().exponent <= 0 else trimmed.quantize(Decimal("1"))
 
 
 class SnapshotStatus:
@@ -150,7 +123,7 @@ class HistoricalPricer:
 
         self._provider_name[ticker] = result.provider
         bars = sorted(
-            (bar.timestamp.date(), _clean_price(bar.close))
+            (bar.timestamp.date(), clean_provider_value(bar.close))
             for bar in result.bars
             # Defensive: a provider that ignores `end_date` must not leak future prices.
             if bar.timestamp.date() <= valuation_date
