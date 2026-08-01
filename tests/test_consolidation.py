@@ -13,6 +13,7 @@ import pytest
 from portfolio_manager.consolidation import (
     build_consolidated_summary,
     create_group,
+    delete_group,
     member_portfolio_ids,
     replace_members,
 )
@@ -337,3 +338,47 @@ def test_consolidation_is_deterministic(session, two_portfolios, provider) -> No
     first = build_consolidated_summary(session, group.id, provider, as_of=DAY)
     second = build_consolidated_summary(session, group.id, provider, as_of=DAY)
     assert first.total_value == second.total_value
+
+
+def test_deleting_a_group_leaves_the_portfolios_intact(session, two_portfolios, provider) -> None:
+    """A group is a reporting lens, so removing it must destroy no recorded data."""
+    import sqlalchemy as sa
+
+    from portfolio_manager.models import Portfolio, PortfolioGroupMember
+    from portfolio_manager.replay import replay_state
+
+    usd, twd = two_portfolios
+    group = create_group(session, "All", "USD", [usd, twd])
+    before = replay_state(session, usd, datetime(2030, 1, 1, tzinfo=UTC))
+
+    delete_group(session, group.id)
+
+    assert session.get(Portfolio, usd) is not None
+    assert session.get(Portfolio, twd) is not None
+    after = replay_state(session, usd, datetime(2030, 1, 1, tzinfo=UTC))
+    assert after.cash == before.cash
+    assert len(after.positions) == len(before.positions)
+
+    orphans = session.scalars(
+        sa.select(PortfolioGroupMember).where(PortfolioGroupMember.group_id == group.id)
+    ).all()
+    assert orphans == [], "membership rows describe only this grouping and go with it"
+
+
+def test_deleting_an_unknown_group_is_not_found(session) -> None:
+    with pytest.raises(DomainError) as excinfo:
+        delete_group(session, "missing")
+    assert excinfo.value.status_code == 404
+
+
+def test_a_deleted_group_can_be_recreated(session, two_portfolios, provider) -> None:
+    """Nothing about the deletion prevents reporting the same portfolios together again."""
+    usd, twd = two_portfolios
+    first = create_group(session, "All", "USD", [usd, twd])
+    total = build_consolidated_summary(session, first.id, provider, as_of=DAY).total_value
+
+    delete_group(session, first.id)
+    second = create_group(session, "All", "USD", [usd, twd])
+
+    assert second.id != first.id
+    assert build_consolidated_summary(session, second.id, provider, as_of=DAY).total_value == total

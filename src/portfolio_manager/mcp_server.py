@@ -802,6 +802,20 @@ async def get_portfolio_group(group_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+async def delete_portfolio_group(group_id: str) -> None:
+    """Delete a portfolio group. The portfolios in it are not affected.
+
+    This removes only the grouping: every portfolio, trade, journal event, and snapshot survives,
+    and an identical group can be recreated. Nothing recorded is lost.
+
+    To stop reporting one portfolio while keeping the group, call
+    `update_portfolio_group_members` with the remaining IDs instead -- that closes the one
+    membership and leaves earlier reports intact.
+    """
+    await _request("DELETE", f"/api/v1/portfolio-groups/{group_id}")
+
+
+@mcp.tool()
 async def update_portfolio_group_members(
     group_id: str, portfolio_ids: list[str]
 ) -> dict[str, Any]:

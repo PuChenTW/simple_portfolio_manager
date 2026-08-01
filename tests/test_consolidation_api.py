@@ -95,3 +95,27 @@ def test_every_consolidation_route_has_an_mcp_tool(harness) -> None:
     }
     tools = {tool.name for tool in asyncio.run(mcp.list_tools())}
     assert operations <= tools, f"endpoints without a tool: {sorted(operations - tools)}"
+
+
+def test_a_group_can_be_deleted_over_http(harness, group) -> None:
+    assert harness.client.delete(f"/api/v1/portfolio-groups/{group['id']}").status_code == 204
+    assert harness.client.get(f"/api/v1/portfolio-groups/{group['id']}").status_code == 404
+    assert harness.client.get("/api/v1/portfolio-groups").json() == []
+
+
+def test_deleting_a_group_does_not_touch_its_portfolios(harness, group) -> None:
+    """The portfolios outlive the lens used to report them together."""
+    before = harness.client.get(f"/api/v1/portfolios/{group['usd']}/summary").json()
+
+    harness.client.delete(f"/api/v1/portfolio-groups/{group['id']}")
+
+    after = harness.client.get(f"/api/v1/portfolios/{group['usd']}/summary")
+    assert after.status_code == 200
+    assert after.json()["total_value"] == before["total_value"]
+    assert len(harness.client.get("/api/v1/portfolios").json()) == 2
+
+
+def test_deleting_an_unknown_group_is_a_machine_readable_404(harness) -> None:
+    response = harness.client.delete("/api/v1/portfolio-groups/missing")
+    assert response.status_code == 404
+    assert response.json()["code"] == "portfolio_group_not_found"

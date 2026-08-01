@@ -14,6 +14,7 @@ from .config import settings
 from .consolidation import (
     build_consolidated_summary,
     create_group,
+    delete_group,
     get_group,
     member_portfolio_ids,
     replace_members,
@@ -1783,6 +1784,27 @@ def list_portfolio_groups(session: SessionDep) -> list[GroupRead]:
 def read_portfolio_group(group_id: GroupId, session: SessionDep) -> GroupRead:
     """Read a group's metadata and the portfolios that are members today."""
     return _group_payload(session, get_group(session, group_id))
+
+
+@app.delete(
+    "/api/v1/portfolio-groups/{group_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    operation_id="delete_portfolio_group",
+    summary="Delete a portfolio group",
+    responses={404: {"model": ErrorResponse, "description": "`portfolio_group_not_found`."}},
+    tags=["consolidation"],
+)
+def remove_portfolio_group(group_id: GroupId, session: SessionDep) -> None:
+    """
+    Delete the group and its membership intervals.
+
+    The portfolios themselves are untouched, along with their journals, snapshots, and every
+    other record: a group is only a lens for reporting them together, so removing it destroys
+    no facts and the same group can be recreated with the same members. To stop reporting one
+    portfolio while keeping the group, use `update_portfolio_group_members` instead, which
+    closes that membership rather than deleting the group.
+    """
+    delete_group(session, group_id)
 
 
 @app.put(

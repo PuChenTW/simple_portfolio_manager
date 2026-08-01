@@ -129,6 +129,18 @@ so the total may legitimately understate the group.
 `issuer_exposure` aggregates listings of one company — an ADR and its local line — into a single
 economic exposure while leaving the individual positions separate.
 
+To stop reporting one portfolio in a group, replace the membership rather than deleting the
+group: the dropped interval is closed, not erased, so earlier reports keep the members they had.
+Deleting a group removes only the grouping — the portfolios, journals, and snapshots survive,
+and the same group can be recreated.
+
+```bash
+curl -X PUT http://127.0.0.1:8001/api/v1/portfolio-groups/GROUP_ID/members \
+  -H 'content-type: application/json' -d '{"portfolio_ids":["ID_A"]}'
+
+curl -X DELETE http://127.0.0.1:8001/api/v1/portfolio-groups/GROUP_ID
+```
+
 ## Market research
 
 History supports the original `?days=365` request and reproducible date ranges:

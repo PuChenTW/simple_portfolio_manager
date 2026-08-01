@@ -204,6 +204,18 @@ def replace_members(
     return group
 
 
+def delete_group(session: Session, group_id: str) -> None:
+    """Remove a group and its membership intervals.
+
+    Safe to delete outright, unlike a posted event: a group is a reporting lens over portfolios
+    that exist independently of it. Nothing recorded is lost -- the portfolios, their journals,
+    and their snapshots are untouched, and the same group can be recreated with the same members.
+    The membership rows go with it because they describe only this grouping.
+    """
+    session.delete(get_group(session, group_id))
+    session.commit()
+
+
 def member_portfolio_ids(session: Session, group_id: str, as_of: date) -> list[str]:
     """Portfolios that were in the group on a date."""
     moment = _end_of_day(as_of)
