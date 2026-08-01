@@ -234,6 +234,11 @@
             </div>
             <span id="journal-count" class="muted"></span>
           </div>
+          <p class="panel__note">
+            標記「遷移紀錄」的是舊系統轉入的交易。舊模型的交易與現金是兩本獨立的帳，從未記錄哪筆現金
+            結算哪筆交易，因此該關聯無法還原，也沒有被猜測。這些事件不含現金分錄，不影響現金餘額與報酬
+            計算，無需處理。真正需要你判斷的現金事件會標記為「待裁定」。
+          </p>
           <div class="table-wrapper">
             <table>
               <thead>

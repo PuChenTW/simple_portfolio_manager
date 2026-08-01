@@ -647,6 +647,17 @@ function renderClassifications(profiles) {
   elements.qClassified.textContent = `${classified} / ${profiles.length}`;
 }
 
+// A badge that asks for action must be reserved for events where action is possible. A migrated
+// trade carries no cash leg, so its missing settlement linkage moves no money and can never be
+// recovered -- flagging it as pending would be a to-do nobody could ever complete, which teaches
+// people to ignore the badge that does matter.
+function statusBadge(event) {
+  if (!event.is_unlinked_legacy) return badge("已入帳", "badge--internal");
+  if (event.flow_is_manual) return badge("已裁定", "badge--internal");
+  if (event.flow_classification === "unknown") return badge("待裁定", "badge--unknown");
+  return badge("遷移紀錄", "badge--none");
+}
+
 function renderJournal(page) {
   clear(elements.journalBody);
   elements.journalCount.textContent = `共 ${page.total} 筆，顯示最近 ${page.items.length} 筆`;
@@ -661,8 +672,7 @@ function renderJournal(page) {
     if (event.flow_is_manual) flow.append(element("span", "instrument__name", "人工裁定"));
     row.append(createCell(flow));
     row.append(createCell(event.source_reference || event.source || "—"));
-    const settled = !event.is_unlinked_legacy || event.flow_is_manual;
-    row.append(createCell(settled ? badge("已入帳", "badge--internal") : badge("遷移待確認", "badge--unknown")));
+    row.append(createCell(statusBadge(event)));
     elements.journalBody.append(row);
   });
   elements.qEvents.textContent = String(page.total);

@@ -163,6 +163,10 @@ td.number, th.number { text-align: right; font-variant-numeric: tabular-nums; }
 .chart__tooltip text { fill: #fff; font-size: 11px; font-variant-numeric: tabular-nums; }
 
 /* Method + provenance ---------------------------------------------------- */
+.panel__note { max-width: 78ch; margin: 14px 0 0; color: var(--muted); font-size: .83rem; line-height: 1.65; }
+
+.panel__note { max-width: 78ch; margin: 14px 0 0; color: var(--muted); font-size: .83rem; line-height: 1.65; }
+
 .method-list { display: grid; gap: 14px; margin: 20px 0 0; }
 .method-list dt { color: var(--muted); font-size: .74rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
 .method-list dd { margin: 5px 0 0; font-size: .88rem; line-height: 1.55; }
