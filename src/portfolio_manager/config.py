@@ -7,6 +7,7 @@ from pathlib import Path
 class Settings:
     database_path: Path
     quote_ttl_seconds: int
+    url_prefix: str
 
     @property
     def database_url(self) -> str:
@@ -18,7 +19,10 @@ def load_settings() -> Settings:
     ttl = int(os.getenv("PORTFOLIO_QUOTE_TTL_SECONDS", "300"))
     if ttl < 0:
         raise ValueError("PORTFOLIO_QUOTE_TTL_SECONDS must be non-negative")
-    return Settings(database_path=database_path, quote_ttl_seconds=ttl)
+    url_prefix = os.getenv("PORTFOLIO_URL_PREFIX", "").rstrip("/")
+    if url_prefix and not url_prefix.startswith("/"):
+        raise ValueError("PORTFOLIO_URL_PREFIX must start with '/'")
+    return Settings(database_path=database_path, quote_ttl_seconds=ttl, url_prefix=url_prefix)
 
 
 settings = load_settings()

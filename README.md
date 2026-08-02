@@ -188,6 +188,26 @@ only. SQLite data is persisted in the `portfolio-data` named volume, so normal c
 and restarts keep the portfolio. Stop the services with `docker compose down`; add `--volumes`
 only when you intentionally want to delete all portfolio data.
 
+The dashboard uses relative paths for its assets and API calls, so it can be mounted behind a
+reverse proxy under a subpath (e.g. `https://host/portfolio-manager/`). Set `PORTFOLIO_URL_PREFIX`
+to that subpath (no trailing slash, e.g. `/portfolio-manager`) so the app can strip it from
+incoming requests before routing and set the dashboard's `<base href>` accordingly -- this works
+whether or not the browser's URL ends in a trailing slash, and needs no special header support
+from the proxy, so it also covers proxies that cannot add custom headers (Tailscale Serve's
+`--set-path`, for instance, forwards the full path unchanged):
+
+```bash
+tailscale serve --bg --set-path /portfolio-manager http://127.0.0.1:8001
+```
+
+```bash
+PORTFOLIO_URL_PREFIX=/portfolio-manager uv run portfolio-manager
+```
+
+An nginx `location /portfolio-manager/ { proxy_pass http://127.0.0.1:8001/; }` block works the
+same way, with or without `PORTFOLIO_URL_PREFIX` depending on whether it strips the prefix itself.
+Without `PORTFOLIO_URL_PREFIX` the dashboard assumes it is mounted at the domain root.
+
 ## Agent integration
 
 Use `http://127.0.0.1:8001/openapi.json` as the source for generated tools or an agent skill. The

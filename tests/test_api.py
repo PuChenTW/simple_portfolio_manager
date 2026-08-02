@@ -55,7 +55,8 @@ def test_dashboard_and_static_assets_are_available_without_changing_openapi(harn
     assert dashboard.status_code == 200
     assert dashboard.headers["content-type"].startswith("text/html")
     assert 'id="portfolio-select"' in dashboard.text
-    assert 'src="/static/dashboard.js"' in dashboard.text
+    assert 'src="static/dashboard.js"' in dashboard.text
+    assert '<base href="/">' in dashboard.text
 
     stylesheet = harness.client.get("/static/dashboard.css")
     script = harness.client.get("/static/dashboard.js")
@@ -64,6 +65,8 @@ def test_dashboard_and_static_assets_are_available_without_changing_openapi(harn
     assert "loadDashboard" in script.text
 
     assert "/" not in harness.client.get("/openapi.json").json()["paths"]
+
+
 
 
 def test_cash_balance_guards_and_idempotency(harness) -> None:

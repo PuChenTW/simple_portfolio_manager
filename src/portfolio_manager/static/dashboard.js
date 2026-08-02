@@ -306,7 +306,7 @@ async function loadSummary() {
   const requestId = ++state.requestId;
   setBusy(true, "正在更新投資組合估值…");
   try {
-    const summary = await fetchJson(`/api/v1/portfolios/${encodeURIComponent(state.selectedId)}/summary`);
+    const summary = await fetchJson(`api/v1/portfolios/${encodeURIComponent(state.selectedId)}/summary`);
     if (requestId !== state.requestId) return;
     renderSummary(summary);
     showStatus("");
@@ -324,7 +324,7 @@ async function loadDashboard() {
   const requestId = ++state.requestId;
   setBusy(true, "正在載入投資組合…");
   try {
-    const portfolios = await fetchJson("/api/v1/portfolios");
+    const portfolios = await fetchJson("api/v1/portfolios");
     if (requestId !== state.requestId) return;
     state.portfolios = portfolios;
     if (!portfolios.length) {
@@ -580,12 +580,12 @@ function renderPerformance(performance, history, currency) {
 // an artifact of asking for dates before the portfolio had any history.
 async function resolveHistoryRange(id) {
   const wide = `start_date=${isoDaysAgo(HISTORY_DAYS)}&end_date=${today()}`;
-  const probe = await fetchJson(`/api/v1/portfolios/${id}/nav-history?${wide}`);
+  const probe = await fetchJson(`api/v1/portfolios/${id}/nav-history?${wide}`);
   if (!probe.snapshots.length) return { range: wide, history: probe };
   const start = probe.snapshots[0].valuation_date;
   const end = probe.snapshots[probe.snapshots.length - 1].valuation_date;
   const range = `start_date=${start}&end_date=${end}`;
-  return { range, history: await fetchJson(`/api/v1/portfolios/${id}/nav-history?${range}`) };
+  return { range, history: await fetchJson(`api/v1/portfolios/${id}/nav-history?${range}`) };
 }
 
 async function loadPerformance() {
@@ -593,7 +593,7 @@ async function loadPerformance() {
   const currency = portfolio?.base_currency ?? "";
   const id = encodeURIComponent(state.selectedId);
   const { range, history } = await resolveHistoryRange(id);
-  const performance = await fetchJson(`/api/v1/portfolios/${id}/performance?${range}`);
+  const performance = await fetchJson(`api/v1/portfolios/${id}/performance?${range}`);
   renderPerformance(performance, history, currency);
 }
 
@@ -672,9 +672,9 @@ async function loadQuality() {
   const id = encodeURIComponent(state.selectedId);
   const { range, history } = await resolveHistoryRange(id);
   const [summary, journal, performance] = await Promise.all([
-    fetchJson(`/api/v1/portfolios/${id}/summary`),
-    fetchJson(`/api/v1/portfolios/${id}/transactions?limit=25`),
-    fetchJson(`/api/v1/portfolios/${id}/performance?${range}`),
+    fetchJson(`api/v1/portfolios/${id}/summary`),
+    fetchJson(`api/v1/portfolios/${id}/transactions?limit=25`),
+    fetchJson(`api/v1/portfolios/${id}/performance?${range}`),
   ]);
 
   renderJournal(journal);
@@ -686,7 +686,7 @@ async function loadQuality() {
 
   const profiles = await Promise.all(
     summary.positions.map((position) =>
-      fetchJson(`/api/v1/instruments/${encodeURIComponent(position.ticker)}/profile`).catch(() => null)
+      fetchJson(`api/v1/instruments/${encodeURIComponent(position.ticker)}/profile`).catch(() => null)
     )
   );
   renderClassifications(profiles.filter(Boolean));
@@ -770,7 +770,7 @@ function renderConsolidated(summary) {
 
 async function loadConsolidated() {
   if (!state.groupId) {
-    const groups = await fetchJson("/api/v1/portfolio-groups").catch(() => []);
+    const groups = await fetchJson("api/v1/portfolio-groups").catch(() => []);
     state.groupId = Array.isArray(groups) && groups.length ? groups[0].id : null;
   }
   if (!state.groupId) {
@@ -778,7 +778,7 @@ async function loadConsolidated() {
     elements.groupContent.hidden = true;
     return;
   }
-  renderConsolidated(await fetchJson(`/api/v1/portfolio-groups/${encodeURIComponent(state.groupId)}/summary`));
+  renderConsolidated(await fetchJson(`api/v1/portfolio-groups/${encodeURIComponent(state.groupId)}/summary`));
 }
 
 elements.tabs.forEach((tab) => {

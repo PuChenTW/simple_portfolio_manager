@@ -11,6 +11,7 @@ services:
     environment:
       PORTFOLIO_DB_PATH: /data/portfolio.db
       PORTFOLIO_QUOTE_TTL_SECONDS: "${PORTFOLIO_QUOTE_TTL_SECONDS:-300}"
+      PORTFOLIO_URL_PREFIX: /portfolio
     volumes:
       - portfolio-data:/data
     healthcheck:
