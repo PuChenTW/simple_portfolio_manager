@@ -282,6 +282,37 @@ def test_a_short_period_is_not_annualized(session, harness, provider) -> None:
     assert result.annualized_twr_percent is None
 
 
+def test_a_period_past_a_month_is_annualized(session, harness, provider) -> None:
+    """Every other test here spans two days and stops at the under-a-month guard, so the
+    annualization arithmetic itself only runs once a period is long enough to reach it."""
+    days = 31
+    last = DAY0 + timedelta(days=days - 1)
+    provider.prices = {
+        DAY0 + timedelta(days=offset): Decimal("100") + offset for offset in range(days)
+    }
+    portfolio_id = build(
+        session, harness, provider, days=days,
+        events=[
+            TransactionRequest(
+                request_id="d", event_type=EventType.DEPOSIT,
+                amount=Decimal("10000"), occurred_at=at(DAY0),
+            ),
+            TransactionRequest(
+                request_id="b", event_type=EventType.BUY, ticker="AAPL",
+                quantity=Decimal("100"), unit_price=Decimal("100"), occurred_at=at(DAY0),
+            ),
+        ],
+    )
+
+    result = calculate_performance(session, portfolio_id, DAY0, last)
+
+    assert result.twr_percent is not None and result.twr_percent > Decimal("0")
+    # A month of gains scales to a much larger annual figure; the exact rate is the method's
+    # business, but it must be a real number rather than an exception.
+    assert result.annualized_twr_percent is not None
+    assert result.annualized_twr_percent > result.twr_percent
+
+
 def test_a_gap_in_the_series_is_reported(session, harness, provider) -> None:
     """Plan principle 3: an incomplete series is named, not quietly interpolated."""
     portfolio_id = harness.portfolio()

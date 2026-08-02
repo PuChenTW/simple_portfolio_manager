@@ -229,8 +229,12 @@ def _annualize(twr: Decimal | None, start: date, end: date) -> Decimal | None:
         return None  # A total loss has no meaningful annual rate.
     try:
         years = Decimal(days) / DAYS_PER_YEAR
-        annual = growth ** float(ONE / years) if years != ZERO else None
-        return None if annual is None else _as_percent(Decimal(str(annual)) - ONE)
+        if years == ZERO:
+            return None
+        # A fractional root is transcendental, so it leaves Decimal for the exponent alone and
+        # returns immediately. The accounting values it is derived from stay exact.
+        annual = float(growth) ** float(ONE / years)
+        return _as_percent(Decimal(str(annual)) - ONE)
     except (InvalidOperation, DivisionByZero, OverflowError, ValueError):
         return None
 
