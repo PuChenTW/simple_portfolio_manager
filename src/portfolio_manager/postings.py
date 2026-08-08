@@ -25,7 +25,7 @@ from .journal import (
     EventType,
     Leg,
     LegType,
-    classify_flow,
+    derived_flow,
     invert,
     require_balanced,
 )
@@ -552,6 +552,28 @@ def legs_for_events(session: Session, event_ids: list[str]) -> dict[str, list[Le
     return legs_by_event
 
 
+def reversed_types_for(session: Session, events: list[JournalEvent]) -> dict[str, str]:
+    """Map each reversal's id to the type of the event it reverses, in one query for the page.
+
+    A reversal's own type says nothing about whether it moved investor capital; only the event it
+    undoes does. Resolving that per row would cost a query per reversal.
+    """
+    targets = {event.reverses_event_id for event in events if event.reverses_event_id}
+    if not targets:
+        return {}
+
+    original_types = dict(
+        session.execute(
+            select(JournalEvent.id, JournalEvent.event_type).where(JournalEvent.id.in_(targets))
+        ).all()
+    )
+    return {
+        event.id: original_types[event.reverses_event_id]
+        for event in events
+        if event.reverses_event_id and event.reverses_event_id in original_types
+    }
+
+
 def ticker_index(session: Session) -> dict[str, str]:
     """Map every instrument id to its ticker, so a page of legs resolves in one query.
 
@@ -574,13 +596,19 @@ def event_detail(session: Session, portfolio_id: str, event_id: str) -> dict:
     reversed_by = session.scalar(
         select(JournalEvent.id).where(JournalEvent.reverses_event_id == event_id)
     )
+    # A reversal is classified by what it undoes, so its target's type has to be read first.
+    reversed_type = (
+        session.scalar(
+            select(JournalEvent.event_type).where(JournalEvent.id == event.reverses_event_id)
+        )
+        if event.reverses_event_id
+        else None
+    )
     return {
         "event": event,
         "legs": legs,
         "balance": report,
-        "flow_classification": classify_flow(EventType(event.event_type))
-        if event.event_type in {member.value for member in EventType}
-        else None,
+        "flow_classification": derived_flow(event.event_type, reversed_type),
         "reverses_event_id": event.reverses_event_id,
         "reversed_by_event_id": reversed_by,
     }

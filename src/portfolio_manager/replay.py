@@ -27,7 +27,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .journal import EventType, FlowClassification, LegType, classify_flow
+from .journal import EventType, FlowClassification, LegType, classify_flow, effective_type
 from .models import Instrument, JournalEvent, JournalLeg
 from .services import ZERO, _aware
 
@@ -369,17 +369,8 @@ def _ticker_index(session: Session) -> dict[str, str]:
 
 
 def _effective_type(event: JournalEvent, reversed_types: dict[str, str]) -> EventType | None:
-    """The event type that governs flow classification.
-
-    A reversal has no economic meaning of its own -- it undoes another event and must land in the
-    same flow category, with the opposite sign. Classifying it on its own `reversal` type would
-    push a reversed deposit into `unknown` and raise a data-quality warning for what is actually
-    a fully recorded correction.
-    """
-    value = event.event_type
-    if value == EventType.REVERSAL.value and event.reverses_event_id:
-        value = reversed_types.get(event.reverses_event_id, value)
-    try:
-        return EventType(value)
-    except ValueError:
-        return None
+    """Resolve this event's governing type against the types of the events already folded."""
+    reversed_type = (
+        reversed_types.get(event.reverses_event_id) if event.reverses_event_id else None
+    )
+    return effective_type(event.event_type, reversed_type)

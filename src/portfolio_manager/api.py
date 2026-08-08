@@ -48,6 +48,7 @@ from .postings import (
     list_events,
     record_transaction,
     reverse_transaction,
+    reversed_types_for,
     ticker_index,
 )
 from .schemas import (
@@ -935,27 +936,23 @@ def read_journal_events(
         offset=offset,
         limit=limit,
     )
-    items = (
-        _events_with_legs(session, events)
-        if include_legs
-        else [_journal_event_read(event) for event in events]
-    )
+    # A reversal is classified by the event it undoes, resolved for the page in one query.
+    reversed_types = reversed_types_for(session, events)
+    items = [_journal_event_read(event, reversed_types.get(event.id)) for event in events]
+    if include_legs:
+        _attach_legs(session, events, items)
     return JournalEventPage(items=items, total=total, offset=offset, limit=limit)
 
 
-def _events_with_legs(session: Session, events: list) -> list[JournalEventRead]:
+def _attach_legs(session: Session, events: list, items: list[JournalEventRead]) -> None:
     """Attach every event's legs, at a cost that does not grow with the number of events."""
     legs_by_event = legs_for_events(session, [event.id for event in events])
     tickers = ticker_index(session)
-    items = []
-    for event in events:
-        item = _journal_event_read(event)
+    for event, item in zip(events, items, strict=True):
         item.legs = [
             _journal_leg_read(leg, tickers.get(leg.instrument_id))
             for leg in legs_by_event.get(event.id, [])
         ]
-        items.append(item)
-    return items
 
 
 @app.get(
@@ -986,8 +983,12 @@ def _event_detail_response(
     report = detail["balance"]
     event_row = detail["event"]
     tickers = ticker_index(session)
+    event_read = _journal_event_read(event_row)
+    # event_detail already resolved the reversal chain; reuse it so the header and the detail's
+    # own field cannot disagree about the same event.
+    event_read.flow_classification = detail["flow_classification"]
     return JournalEventDetail(
-        event=_journal_event_read(event_row),
+        event=event_read,
         legs=[
             _journal_leg_read(leg, tickers.get(leg.instrument_id))
             for leg in detail["legs"]
@@ -1613,15 +1614,19 @@ def _journal_leg_read(leg, ticker: str | None = None) -> JournalLegRead:
 _NOT_ON_EVENT_ROW = frozenset({"flow_classification", "legs"})
 
 
-def _journal_event_read(event) -> JournalEventRead:
-    """A journal event with the flow classification implied by its type."""
+def _journal_event_read(event, reversed_type: str | None = None) -> JournalEventRead:
+    """A journal event with its flow classification.
+
+    `reversed_type` is the type of the event this one reverses; without it every reversal reports
+    `unknown`, which reads as a data-quality problem nobody can act on.
+    """
     return JournalEventRead(
         **{
             field: getattr(event, field)
             for field in JournalEventRead.model_fields
             if field not in _NOT_ON_EVENT_ROW
         },
-        flow_classification=derived_flow(event.event_type),
+        flow_classification=derived_flow(event.event_type, reversed_type),
     )
 
 

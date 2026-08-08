@@ -23,10 +23,14 @@ dependency install to every source change.
 Data-transparency modules build on that core. `taxonomy.py` holds the asset-class and
 security-type vocabulary plus provenance ranking; `identity.py` resolves stable instrument IDs,
 issuer mapping, and classification precedence. `journal.py` defines event and leg vocabulary with
-the balance validator, `postings.py` performs atomic posting and reversal -- and reads a page of
-events with `legs_for_events`, which loads every leg in one query so listing never costs a query
-per row -- and
-`corporate_actions.py` records, previews, and applies issuer events.
+the balance validator, plus the flow-classification rules every layer shares: `effective_type`
+resolves a `reversal` to the type of the event it undoes, because `reversal` carries no economic
+meaning of its own and classifying it literally reports a fully recorded correction as an
+unresolved one. The sign needs no special handling -- a reversal's legs are already inverted, so a
+reversed deposit lands in the same category with the opposite sign. `postings.py` performs atomic
+posting and reversal, and serves page reads: `legs_for_events` and `reversed_types_for` each
+resolve a whole page in one query, so listing never costs a query per row. `corporate_actions.py`
+records, previews, and applies issuer events.
 
 Historical valuation builds on the journal. `replay.py` rebuilds positions, cash, and flow
 totals at any cutoff by folding journal legs, and is the only correct source of past state --

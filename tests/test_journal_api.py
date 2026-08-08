@@ -173,6 +173,73 @@ def test_journal_filters_by_type_instrument_and_source_reference(harness) -> Non
     assert harness.client.get(f"{base}?source_reference=NOPE").json()["total"] == 0
 
 
+def test_reversal_is_classified_by_the_event_it_undoes(harness) -> None:
+    """`reversal` says nothing on its own; only the event it undoes decides the flow category.
+
+    Reporting `unknown` here badges a fully recorded correction as a data-quality problem the
+    reader can never clear, which is how the warnings that do matter get ignored.
+    """
+    portfolio_id = harness.portfolio()
+    deposit(harness, portfolio_id)
+    base = f"/api/v1/portfolios/{portfolio_id}/transactions"
+
+    deposit_id = deposit(harness, portfolio_id, amount="5000", request_id="d-2").json()["event"][
+        "id"
+    ]
+    harness.client.post(f"{base}/{deposit_id}/reversal", json={"request_id": "rev-deposit"})
+    buy_id = buy(harness, portfolio_id).json()["event"]["id"]
+    harness.client.post(f"{base}/{buy_id}/reversal", json={"request_id": "rev-buy"})
+
+    listed = harness.client.get(base).json()["items"]
+    flows = {
+        event["reverses_event_id"]: event["flow_classification"]
+        for event in listed
+        if event["reverses_event_id"]
+    }
+    assert flows[deposit_id] == "external", "reversing a deposit still moves investor capital"
+    assert flows[buy_id] == "internal", "reversing a buy is portfolio activity, not capital"
+
+    # The detail endpoint must not disagree with the page it was reached from.
+    for event in listed:
+        detail = harness.client.get(f"{base}/{event['id']}").json()
+        assert detail["flow_classification"] == event["flow_classification"]
+        assert detail["event"]["flow_classification"] == event["flow_classification"]
+
+
+def test_resolving_reversals_costs_no_query_per_event(harness) -> None:
+    from sqlalchemy import event as sa_event
+
+    portfolio_id = harness.portfolio()
+    deposit(harness, portfolio_id, amount="100000")
+    base = f"/api/v1/portfolios/{portfolio_id}/transactions"
+
+    def count_queries() -> int:
+        statements = []
+        engine = harness.session_factory.kw["bind"]
+
+        def record(conn, cursor, statement, parameters, context, executemany):
+            statements.append(statement)
+
+        sa_event.listen(engine, "before_cursor_execute", record)
+        try:
+            assert harness.client.get(f"{base}?limit=200").status_code == 200
+        finally:
+            sa_event.remove(engine, "before_cursor_execute", record)
+        return len(statements)
+
+    def reverse_a_buy(index: int) -> None:
+        event_id = buy(harness, portfolio_id, request_id=f"rb-{index}").json()["event"]["id"]
+        harness.client.post(f"{base}/{event_id}/reversal", json={"request_id": f"rr-{index}"})
+
+    reverse_a_buy(0)
+    small = count_queries()
+    for index in range(1, 8):
+        reverse_a_buy(index)
+    large = count_queries()
+
+    assert small == large, f"query count grew from {small} to {large} as reversals were added"
+
+
 def test_legs_are_absent_unless_requested(harness) -> None:
     """The default response must stay exactly what callers built against before `include_legs`."""
     portfolio_id = harness.portfolio()

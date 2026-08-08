@@ -120,8 +120,12 @@ _INTERNAL_EVENTS = frozenset(
     }
 )
 
+# REVERSAL is deliberately in neither set. It belongs to whichever category the event it undoes
+# belongs to, which `effective_type` resolves; a literal classification would be a guess.
+
 
 def classify_flow(event_type: EventType) -> FlowClassification:
+    """Classify a resolved event type. Callers holding a raw string want `derived_flow`."""
     if event_type in _EXTERNAL_EVENTS:
         return FlowClassification.EXTERNAL
     if event_type in _INTERNAL_EVENTS:
@@ -129,16 +133,37 @@ def classify_flow(event_type: EventType) -> FlowClassification:
     return FlowClassification.UNKNOWN
 
 
-def derived_flow(event_type: str) -> FlowClassification:
+def effective_type(event_type: str, reversed_type: str | None = None) -> EventType | None:
+    """The event type that governs flow classification.
+
+    A reversal has no economic meaning of its own -- it undoes another event and must land in the
+    same flow category, with the opposite sign. Classifying it on its own `reversal` type would
+    push a reversed deposit into UNKNOWN and flag a fully recorded correction as a data-quality
+    problem the reader can never resolve, which is how a warning that matters gets ignored.
+
+    The sign is not this function's business: a reversal's legs are already inverted, so a
+    reversed deposit lands in the same category with the opposite sign on its own.
+    """
+    value = event_type
+    if value == EventType.REVERSAL.value and reversed_type:
+        value = reversed_type
+    try:
+        return EventType(value)
+    except ValueError:
+        return None
+
+
+def derived_flow(event_type: str, reversed_type: str | None = None) -> FlowClassification:
     """Classify a stored event type, which is a plain string on the row.
+
+    Pass `reversed_type` -- the type of the event this one reverses -- whenever the caller can
+    resolve it, or every reversal reports UNKNOWN.
 
     An unrecognized value stays UNKNOWN rather than defaulting to either side: a flow guessed
     wrong is silently absorbed into the capital base or the return, and neither is recoverable.
     """
-    try:
-        return classify_flow(EventType(event_type))
-    except ValueError:
-        return FlowClassification.UNKNOWN
+    resolved = effective_type(event_type, reversed_type)
+    return FlowClassification.UNKNOWN if resolved is None else classify_flow(resolved)
 
 
 @dataclass
