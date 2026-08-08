@@ -1,150 +1,120 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
+A local-first portfolio manager: a FastAPI service over SQLite that records an auditable
+double-entry journal, values it historically, and exposes every endpoint to agents through MCP.
+Python 3.13, `uv`, Alembic, Redis (optional), no frontend build step.
 
-Application code lives in `src/portfolio_manager/`. Keep HTTP routing and OpenAPI metadata in
-`api.py`, request/response contracts in `schemas.py`, database tables in `models.py`, portfolio
-rules in `services.py`, and Yahoo market-data logic in `market.py`. The MCP server in
-`mcp_server.py` is a thin HTTP client that wraps each API endpoint as a tool; add a matching tool
-there whenever you add or change an endpoint. That module also holds the MCP prompts and
-resources: prompts carry multi-step workflows and the mistakes their ordering prevents, resources
-carry the vocabulary and conventions a call needs before any tool is chosen. Generate a resource
-from the enum it documents rather than restating it, so the two cannot drift. SQLite setup and runtime
-configuration belong in `db.py` and `config.py`. Database migrations live under
-`alembic/versions/`; add one whenever persisted models change. Tests live in `tests/`, with fakes
-in `tests/conftest.py`. The read-only dashboard in `static/` is plain HTML, CSS, and vanilla JS
-with no build step and no external libraries -- the NAV chart is hand-rolled SVG. Verify frontend
-changes with Playwright against the running service, not by inspection. Docker deployment files are
-`Dockerfile` and `compose.yaml`. The Dockerfile installs dependencies from `pyproject.toml` and
-`uv.lock` alone, before `src/` is copied, so a source edit rebuilds in about a second instead of
-resyncing every dependency. Keep `COPY src` below that step; moving it above ties the whole
-dependency install to every source change.
+## Commands
 
-Data-transparency modules build on that core. `taxonomy.py` holds the asset-class and
-security-type vocabulary plus provenance ranking; `identity.py` resolves stable instrument IDs,
-issuer mapping, and classification precedence. `journal.py` defines event and leg vocabulary with
-the balance validator, plus the flow-classification rules every layer shares: `effective_type`
-resolves a `reversal` to the type of the event it undoes, because `reversal` carries no economic
-meaning of its own and classifying it literally reports a fully recorded correction as an
-unresolved one. The sign needs no special handling -- a reversal's legs are already inverted, so a
-reversed deposit lands in the same category with the opposite sign. `postings.py` performs atomic
-posting and reversal, and serves page reads: `legs_for_events` and `reversed_types_for` each
-resolve a whole page in one query, so listing never costs a query per row. `corporate_actions.py`
-records, previews, and applies issuer events.
-
-Historical valuation builds on the journal. `replay.py` rebuilds positions, cash, and flow
-totals at any cutoff by folding journal legs, and is the only correct source of past state --
-`positions` and `cash_balances` describe the present. `valuation.py` prices a replayed state
-with history bounded by the valuation date and stores it as a snapshot, plus the re-runnable
-range rebuild behind `portfolio-admin rebuild-snapshots`. `performance.py` computes TWR and XIRR
-from stored snapshots and journal flows, and reports the coverage behind them: a gap, a partial
-valuation, or an event whose cash flow cannot be classified each makes a return unreliable.
-`fx.py` resolves point-in-time exchange rates -- direct, inverted, or crossed -- and stores every
-observation so a conversion can be audited; `consolidation.py` groups portfolios and expresses
-their holdings in one reporting currency, keeping each local figure beside its converted one.
-
-`cache.py` sits under all of that as a Redis layer wrapping the `MarketProvider` protocol, so no
-consumer knows it exists. Daily bars are stored one calendar month per key: callers ask for
-ranges that start and end mid-month, and a bucket holding only the requested slice would leave a
-gap the cache itself invented, so a fetch widens to the month boundary and only whole months are
-stored. The month containing today expires in minutes because its last bar is still moving;
-earlier months last far longer because a closed session's OHLC is a fact. Every Redis failure
-degrades to the provider -- a cache that can break a request is worse than no cache -- and
-`PORTFOLIO_REDIS_URL` left unset disables the layer entirely.
-
-That "fact" has one exception, and it is the reason `clear_market_cache` exists. Auto-adjusted
-bars are restated by the provider after a split or dividend, which no rule here can detect.
-Recording such an action logs a warning naming the ticker rather than expiring entries on a
-guess about when the restatement happened; clearing is always safe, since the cache holds
-nothing that cannot be fetched again.
-
-## Build, Test, and Development Commands
-
-- `uv sync`: create the Python 3.13 environment from `uv.lock`.
-- `uv run alembic upgrade head`: initialize or migrate the SQLite database.
-- `uv run portfolio-manager`: run the API at `http://127.0.0.1:8001`.
-- `uv run portfolio-mcp`: run the MCP server (stdio; needs the API running). Set
+- `uv sync` — create the environment from `uv.lock`.
+- `uv run alembic upgrade head` — initialize or migrate the database.
+- `uv run portfolio-manager` — run the API at `http://127.0.0.1:8001`.
+- `uv run portfolio-mcp` — run the MCP server (stdio; needs the API running). Set
   `PORTFOLIO_MCP_TRANSPORT=streamable-http` for the HTTP transport.
-- `uv run portfolio-admin rebuild-snapshots <portfolio_id> <start> <end>`: build daily valuation
-  snapshots over a date range. Safe to re-run; existing dates are skipped.
-- `uv run pytest`: run deterministic tests; live Yahoo tests are skipped.
-- `uv run pytest -m external`: exercise `AAPL`, `2330.TW`, and `BTC-USD` online.
-- `uv run ruff check .`: enforce imports and Python style.
-- `docker compose up --build -d`: build, migrate, and launch the containerized service.
+- `uv run portfolio-admin rebuild-snapshots <portfolio_id> <start> <end>` — build daily
+  valuation snapshots. Safe to re-run; existing dates are skipped.
+- `uv run pytest` — deterministic tests; live Yahoo tests are skipped.
+- `uv run pytest -m external` — exercise `AAPL`, `2330.TW`, `BTC-USD` online.
+- `uv run ruff check .` — imports and style.
+- `docker compose up --build -d` — build, migrate, and launch the container stack.
 
-## Coding Style & Naming Conventions
+## Invariants
 
-Use four-space indentation, Python type hints, and a 100-character line limit. Ruff enforces
-`E`, `F`, `I`, `UP`, `B`, and `SIM` rules. Prefer small single-purpose functions, early returns,
-and concrete data structures. Use `snake_case` for modules/functions/fields, `PascalCase` for
-classes and Pydantic models, and stable `operation_id` values for routes. Preserve
-`Decimal` arithmetic for financial values; never introduce binary floats into accounting logic.
-
-## Testing Guidelines
-
-Pytest files use `test_*.py` and tests use `test_<behavior>`. Isolate API tests with the temporary
-SQLite database and fake market provider from `conftest.py`; normal tests must not require network
-access. Add regression tests for accounting formulas, idempotency, error codes, migrations, and
-OpenAPI changes. Run both pytest and Ruff before submitting changes.
-
-`tests/legacy_api_baseline.json` freezes the 32 operations, 67 response models, and 32 MCP tools
-published at version 0.3.0. Adding a *new* operation, model, or tool is fine. Touching one already
-in the baseline is not, and the comparison is exact equality, not containment: adding an optional
-query parameter to an existing operation, or an optional field to an existing model, fails
-`test_backward_compatibility.py` just as removing one does. That is deliberate -- it forces an
-addition to be a decision someone made rather than a diff nobody noticed -- so the fix is an
-explicit version bump, never a quietly regenerated baseline. Version 0.2.0 was such a bump: it
-removed the pre-journal `record_trade` and `record_cash_transaction` ledgers, whose position and
-cash writes were independent and could disagree. `record_transaction` is now the only write path.
-0.3.0 was the additive kind: `include_legs` on `list_journal_events` returns each event's legs
-inline, so reading a day of activity costs one request rather than one per event. 0.4.0 was too:
-`clear_market_cache` drops cached price history for one ticker, needed because the Redis layer in
-`cache.py` cannot tell when a provider restates its auto-adjusted bars. `test_migrations.py` additionally asserts that
-the migrated schema matches the ORM models, since the test harness builds tables from the ORM
-while production runs Alembic. `test_mcp_server.py` asserts every API operation has a matching
-MCP tool, so adding an endpoint without its tool fails the suite rather than shipping a surface
-agents cannot reach. It also asserts that `portfolio://taxonomy` lists every enum member, that
-`portfolio://conventions` documents every `DomainError` code raised anywhere in the package, and
-that no prompt names a tool that does not exist -- a workflow referencing a removed tool fails
-mid-task, which is worse than having no workflow at all.
-
-A warning nobody can ever clear is worse than no warning: it teaches readers to ignore the ones
-that matter. Before reporting a gap, check whether the user can actually act on it, and whether it
-actually changes a number. A permanent fact about the data is not an open task, and it belongs in
-a different count from the gaps that genuinely bias a result.
-
-## Commit & Pull Request Guidelines
-
-Use concise imperative commits such as `Add stale quote fallback` or `Document trade
-idempotency`. Keep unrelated changes separate. Pull requests should explain behavior changes,
-list verification commands, note schema migrations or API compatibility impact, and include
-example requests/responses when the OpenAPI contract changes. Dashboard changes should say what
-was verified in a browser and at which widths.
-
-## Security & Agent-Specific Rules
-
-Keep the service bound to loopback unless explicitly approved otherwise. Never commit database
-files, credentials, or provider secrets. Trades record completed executions only: they do not
-place orders or alter cash. Preserve single-currency portfolios, mutation `request_id`
-idempotency, stale-quote warnings, and machine-readable `{code, message, details}` errors.
-
-Five invariants govern the data-transparency work and must not be weakened. They share one idea:
-a value this service cannot determine is reported as undetermined, because an invented number is
+These five govern the data-transparency work and must not be weakened. They share one idea: a
+value this service cannot determine is reported as undetermined, because an invented number is
 indistinguishable from a real one once written.
 
 1. **Never guess.** A classification, cost allocation, or trade-to-cash linkage that cannot be
-   determined stays `unclassified` or `unresolved` with a warning. An invented
-   value is indistinguishable from a real one once written and silently corrupts everything
-   derived from it.
+   determined stays `unclassified` or `unresolved` with a warning.
 2. **Never overwrite provenance.** A manual override outranks a provider value rather than
    replacing it, so retracting the override restores the original.
 3. **Never post half an event.** Legs and their position/cash projections commit in one
    transaction, and posted events are corrected by reversal, never by edit or delete.
-4. **Never convert at a guessed rate.** A currency pair that cannot be resolved leaves the
-   amount in its own currency, excluded from the converted total and listed in `unconverted`
-   with the coverage percentage. A total that quietly omitted it would look complete and be
-   wrong. Rates never come from after the report date, and every conversion reports its path.
+4. **Never convert at a guessed rate.** An unresolvable pair leaves the amount in its own
+   currency, excluded from the converted total and listed in `unconverted` with a coverage
+   percentage. Rates never come from after the report date, and every conversion reports its path.
 5. **Never value a date with a later price.** Snapshots replay the journal to the cutoff and
-   price it from history bounded by that date. A holding with no price on or before the date is
-   excluded from `securities_value`, carried at cost in `unpriced_market_value`, and makes the
-   snapshot `partial`; a missing date in a series is reported, never interpolated.
+   price from history bounded by that date. An unpriced holding is excluded from
+   `securities_value`, carried at cost in `unpriced_market_value`, and makes the snapshot
+   `partial`; a missing date in a series is reported, never interpolated.
+
+A corollary for anything user-facing: a warning nobody can ever clear is worse than no warning,
+because it teaches readers to ignore the ones that matter. Before reporting a gap, check that the
+user can act on it and that it changes a number. A permanent fact about the data is not an open
+task and belongs in a different count from gaps that genuinely bias a result.
+
+## Architecture
+
+Application code lives in `src/portfolio_manager/`, where most module names say what they hold.
+The ones that don't, and the couplings that are easy to break:
+
+- **`replay.py` is the only correct source of past state.** `positions` and `cash_balances` are
+  present-state projections — reading them for a historical question silently returns today's
+  answer with a past date on it.
+- **`mcp_server.py` mirrors the whole API.** It is a thin HTTP client wrapping each endpoint as a
+  tool, so a new endpoint without its tool ships a surface agents cannot reach. Its resources are
+  generated from the enums they document so the two cannot drift.
+- **`cache.py` is invisible by design** — a Redis layer wrapping the `MarketProvider` protocol
+  that no consumer knows exists. Every failure degrades to the provider; `PORTFOLIO_REDIS_URL`
+  unset disables it. Its month-bucketing rules are subtle and documented separately.
+- **Persisted model changes need an Alembic migration** under `alembic/versions/`. The test
+  harness builds tables from the ORM while production runs Alembic, so a missing migration passes
+  tests and breaks deployment.
+- **Keep `COPY src` below the dependency install in the `Dockerfile`.** Moving it above ties the
+  whole dependency install to every source edit.
+
+See @docs/ARCHITECTURE.md before changing the journal, cache, or valuation subsystems — each
+encodes a decision that looks like overhead until you know what it prevents.
+
+## Testing
+
+Files are `test_*.py`, tests are `test_<behavior>`. Isolate API tests with the temporary SQLite
+database and fake market provider from `tests/conftest.py`; normal tests must not require network
+access. Add regression tests for accounting formulas, idempotency, error codes, migrations, and
+OpenAPI changes.
+
+`tests/legacy_api_baseline.json` freezes the 32 operations, 67 response models, and 32 MCP tools
+published at version 0.4.0. Adding a new operation, model, or tool is fine. Touching one already
+in the baseline is not, and the comparison is exact equality rather than containment: adding an
+optional query parameter to an existing operation, or an optional field to an existing model,
+fails `test_backward_compatibility.py` just as removing one does. That is deliberate — it forces
+an addition to be a decision someone made rather than a diff nobody noticed. The fix is an
+explicit version bump, never a quietly regenerated baseline. See @docs/ARCHITECTURE.md for the
+version history and what each bump bought.
+
+Three suites guard cross-cutting contracts: `test_migrations.py` asserts the migrated schema
+matches the ORM models, since the harness builds tables from the ORM while production runs
+Alembic. `test_mcp_server.py` asserts every API operation has a matching MCP tool, that
+`portfolio://taxonomy` lists every enum member, that `portfolio://conventions` documents every
+`DomainError` code raised anywhere in the package, and that no prompt names a nonexistent tool.
+
+## Style
+
+Ruff owns formatting and import rules; read `pyproject.toml` rather than restating them here.
+Two conventions it cannot enforce:
+
+- **Use `Decimal` for every financial value.** A binary float in accounting logic produces errors
+  that survive every test with round numbers and surface only in production totals.
+- Routes need stable `operation_id` values — they are the MCP tool names, so renaming one breaks
+  the agent surface and the compatibility baseline.
+
+## Security
+
+Keep the service bound to loopback unless explicitly approved otherwise. Never commit database
+files, credentials, or provider secrets. Trades record completed executions only: they do not
+place orders or alter cash. Preserve single-currency portfolios, mutation `request_id`
+idempotency, stale-quote warnings, and machine-readable errors.
+
+## Verifying your work
+
+- Run `uv run pytest` and `uv run ruff check .` before submitting.
+- Dashboard changes must be verified with Playwright against the running service, not by
+  inspection — `static/` is plain HTML, CSS, and vanilla JS with no build step and no external
+  libraries, so nothing catches a broken selector but a browser. Say which widths you checked.
+- A `docker compose` stack may already be running against real portfolio data. Check
+  `docker compose ps` before assuming ports are free, and prefer a separate `PORTFOLIO_DB_PATH`
+  and non-default port for manual testing.
+
+Pull requests explain behavior changes, list verification commands, note schema migrations or
+API compatibility impact, and include example requests/responses when the OpenAPI contract
+changes.
