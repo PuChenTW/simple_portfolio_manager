@@ -14,6 +14,7 @@ from portfolio_manager.journal import EventStatus, EventType, LegType
 from portfolio_manager.models import CashBalance, JournalEvent, JournalLeg, Position
 from portfolio_manager.postings import (
     TransactionRequest,
+    legs_for_events,
     record_transaction,
     reverse_transaction,
 )
@@ -239,3 +240,36 @@ def test_trade_in_a_foreign_currency_portfolio_is_rejected(session, harness) -> 
     with pytest.raises(DomainError) as excinfo:
         record_transaction(session, portfolio_id, buy_request("twd-buy"))
     assert excinfo.value.code == "currency_mismatch"
+
+
+def test_legs_for_events_groups_by_event_and_matches_single_event_loading(
+    session, funded_portfolio
+) -> None:
+    first = record_transaction(session, funded_portfolio, buy_request("batch-1"))
+    second = record_transaction(session, funded_portfolio, buy_request("batch-2"))
+
+    batched = legs_for_events(session, [first.id, second.id])
+
+    assert set(batched) == {first.id, second.id}
+    # A buy settles as security + cash + fee + tax, and each event keeps its own legs.
+    assert {leg.leg_type for leg in batched[first.id]} == {
+        LegType.SECURITY,
+        LegType.CASH,
+        LegType.FEE,
+        LegType.TAX,
+    }
+    assert all(leg.metadata is None or isinstance(leg.metadata, str) for leg in batched[first.id])
+
+
+def test_legs_for_events_returns_empty_without_querying_for_no_ids(session) -> None:
+    assert legs_for_events(session, []) == {}
+
+
+def test_legs_for_events_omits_events_that_have_no_legs(session, funded_portfolio) -> None:
+    """Callers use `.get(event_id, [])`, so an unknown id must simply be absent."""
+    posted = record_transaction(session, funded_portfolio, buy_request("batch-3"))
+
+    batched = legs_for_events(session, [posted.id, "no-such-event"])
+
+    assert "no-such-event" not in batched
+    assert batched.get("no-such-event", []) == []

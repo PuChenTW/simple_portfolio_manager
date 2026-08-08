@@ -23,7 +23,9 @@ dependency install to every source change.
 Data-transparency modules build on that core. `taxonomy.py` holds the asset-class and
 security-type vocabulary plus provenance ranking; `identity.py` resolves stable instrument IDs,
 issuer mapping, and classification precedence. `journal.py` defines event and leg vocabulary with
-the balance validator, `postings.py` performs atomic posting and reversal, and
+the balance validator, `postings.py` performs atomic posting and reversal -- and reads a page of
+events with `legs_for_events`, which loads every leg in one query so listing never costs a query
+per row -- and
 `corporate_actions.py` records, previews, and applies issuer events.
 
 Historical valuation builds on the journal. `replay.py` rebuilds positions, cash, and flow
@@ -67,11 +69,16 @@ access. Add regression tests for accounting formulas, idempotency, error codes, 
 OpenAPI changes. Run both pytest and Ruff before submitting changes.
 
 `tests/legacy_api_baseline.json` freezes the 32 operations, 67 response models, and 32 MCP tools
-published at version 0.2.0. Adding to the surface is fine; changing or removing anything in the
-baseline fails `test_backward_compatibility.py` and requires an explicit version bump rather than
-a regenerated baseline. Version 0.2.0 was such a bump: it removed the pre-journal `record_trade`
-and `record_cash_transaction` ledgers, whose position and cash writes were independent and could
-disagree. `record_transaction` is now the only write path. `test_migrations.py` additionally asserts that
+published at version 0.3.0. Adding a *new* operation, model, or tool is fine. Touching one already
+in the baseline is not, and the comparison is exact equality, not containment: adding an optional
+query parameter to an existing operation, or an optional field to an existing model, fails
+`test_backward_compatibility.py` just as removing one does. That is deliberate -- it forces an
+addition to be a decision someone made rather than a diff nobody noticed -- so the fix is an
+explicit version bump, never a quietly regenerated baseline. Version 0.2.0 was such a bump: it
+removed the pre-journal `record_trade` and `record_cash_transaction` ledgers, whose position and
+cash writes were independent and could disagree. `record_transaction` is now the only write path.
+0.3.0 was the additive kind: `include_legs` on `list_journal_events` returns each event's legs
+inline, so reading a day of activity costs one request rather than one per event. `test_migrations.py` additionally asserts that
 the migrated schema matches the ORM models, since the test harness builds tables from the ORM
 while production runs Alembic. `test_mcp_server.py` asserts every API operation has a matching
 MCP tool, so adding an endpoint without its tool fails the suite rather than shipping a surface

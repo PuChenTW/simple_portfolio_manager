@@ -2356,69 +2356,53 @@
    "type": "object"
   },
   "JournalEventRead": {
-   "description": "A posted event header without its legs.",
    "properties": {
-    "created_at": {
-     "format": "date-time",
-     "title": "Created At",
-     "type": "string"
-    },
-    "event_type": {
-     "title": "Event Type",
-     "type": "string"
-    },
-    "flow_classification": {
-     "$ref": "#/components/schemas/FlowClassification",
-     "description": "Whether this event moved investor capital across the portfolio boundary (external) or was portfolio activity (internal), derived from the event type."
-    },
-    "functional_currency": {
-     "title": "Functional Currency",
-     "type": "string"
-    },
     "id": {
-     "title": "Id",
-     "type": "string"
-    },
-    "memo": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "title": "Memo"
-    },
-    "occurred_at": {
-     "format": "date-time",
-     "title": "Occurred At",
-     "type": "string"
+     "type": "string",
+     "title": "Id"
     },
     "portfolio_id": {
-     "title": "Portfolio Id",
-     "type": "string"
+     "type": "string",
+     "title": "Portfolio Id"
     },
     "request_id": {
-     "title": "Request Id",
-     "type": "string"
+     "type": "string",
+     "title": "Request Id"
     },
-    "reverses_event_id": {
+    "event_type": {
+     "type": "string",
+     "title": "Event Type"
+    },
+    "status": {
+     "type": "string",
+     "title": "Status"
+    },
+    "functional_currency": {
+     "type": "string",
+     "title": "Functional Currency"
+    },
+    "occurred_at": {
+     "type": "string",
+     "format": "date-time",
+     "title": "Occurred At"
+    },
+    "trade_date": {
      "anyOf": [
       {
-       "type": "string"
+       "type": "string",
+       "format": "date-time"
       },
       {
        "type": "null"
       }
      ],
-     "title": "Reverses Event Id"
+     "title": "Trade Date"
     },
     "settlement_date": {
      "anyOf": [
       {
-       "format": "date-time",
-       "type": "string"
+       "type": "string",
+       "format": "date-time"
       },
       {
        "type": "null"
@@ -2427,8 +2411,8 @@
      "title": "Settlement Date"
     },
     "source": {
-     "title": "Source",
-     "type": "string"
+     "type": "string",
+     "title": "Source"
     },
     "source_reference": {
      "anyOf": [
@@ -2441,23 +2425,54 @@
      ],
      "title": "Source Reference"
     },
-    "status": {
-     "title": "Status",
-     "type": "string"
-    },
-    "trade_date": {
+    "memo": {
      "anyOf": [
       {
-       "format": "date-time",
        "type": "string"
       },
       {
        "type": "null"
       }
      ],
-     "title": "Trade Date"
+     "title": "Memo"
+    },
+    "reverses_event_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Reverses Event Id"
+    },
+    "flow_classification": {
+     "$ref": "#/components/schemas/FlowClassification",
+     "description": "Whether this event moved investor capital across the portfolio boundary (external) or was portfolio activity (internal), derived from the event type."
+    },
+    "created_at": {
+     "type": "string",
+     "format": "date-time",
+     "title": "Created At"
+    },
+    "legs": {
+     "anyOf": [
+      {
+       "items": {
+        "$ref": "#/components/schemas/JournalLegRead"
+       },
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Legs",
+     "description": "This event's legs, present only when the request set `include_legs`. Null means the legs were not requested, not that the event has none."
     }
    },
+   "type": "object",
    "required": [
     "id",
     "portfolio_id",
@@ -2476,42 +2491,21 @@
     "created_at"
    ],
    "title": "JournalEventRead",
-   "type": "object"
+   "description": "A posted event header. Legs are present only when the caller asked for them."
   },
   "JournalLegRead": {
-   "description": "One side of an event, in the currency named on the leg.",
    "properties": {
-    "account_role": {
-     "title": "Account Role",
-     "type": "string"
+    "leg_type": {
+     "type": "string",
+     "title": "Leg Type"
     },
-    "amount_delta": {
-     "anyOf": [
-      {
-       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "title": "Amount Delta"
+    "account_role": {
+     "type": "string",
+     "title": "Account Role"
     },
     "currency": {
-     "title": "Currency",
-     "type": "string"
-    },
-    "fx_rate": {
-     "anyOf": [
-      {
-       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "title": "Fx Rate"
+     "type": "string",
+     "title": "Currency"
     },
     "instrument_id": {
      "anyOf": [
@@ -2524,9 +2518,53 @@
      ],
      "title": "Instrument Id"
     },
-    "leg_type": {
-     "title": "Leg Type",
-     "type": "string"
+    "quantity_delta": {
+     "anyOf": [
+      {
+       "type": "string",
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Quantity Delta"
+    },
+    "amount_delta": {
+     "anyOf": [
+      {
+       "type": "string",
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Amount Delta"
+    },
+    "unit_price": {
+     "anyOf": [
+      {
+       "type": "string",
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Unit Price"
+    },
+    "fx_rate": {
+     "anyOf": [
+      {
+       "type": "string",
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "title": "Fx Rate"
     },
     "metadata": {
      "anyOf": [
@@ -2539,31 +2577,20 @@
      ],
      "title": "Metadata"
     },
-    "quantity_delta": {
+    "ticker": {
      "anyOf": [
       {
-       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
        "type": "string"
       },
       {
        "type": "null"
       }
      ],
-     "title": "Quantity Delta"
-    },
-    "unit_price": {
-     "anyOf": [
-      {
-       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "title": "Unit Price"
+     "title": "Ticker",
+     "description": "The instrument's ticker, resolved from `instrument_id` for display. Null on cash, fee, and tax legs, which name no instrument."
     }
    },
+   "type": "object",
    "required": [
     "leg_type",
     "account_role",
@@ -2575,7 +2602,7 @@
     "fx_rate"
    ],
    "title": "JournalLegRead",
-   "type": "object"
+   "description": "One side of an event, in the currency named on the leg."
   },
   "MarketInstrumentRead": {
    "description": "Resolved instrument metadata, quote, indicators, and data-quality warnings.",
@@ -5517,7 +5544,41 @@
    }
   },
   "list_journal_events": {
+   "path": "/api/v1/portfolios/{portfolio_id}/transactions",
    "method": "get",
+   "requestBody": null,
+   "responses": {
+    "200": {
+     "description": "Matching events, newest first",
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/JournalEventPage"
+       }
+      }
+     }
+    },
+    "422": {
+     "description": "Invalid request data or a violated portfolio rule; inspect `code`.",
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     }
+    },
+    "404": {
+     "description": "`portfolio_not_found`.",
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ErrorResponse"
+       }
+      }
+     }
+    }
+   },
    "parameters": [
     [
      "end",
@@ -5525,6 +5586,10 @@
     ],
     [
      "event_type",
+     "query"
+    ],
+    [
+     "include_legs",
      "query"
     ],
     [
@@ -5551,41 +5616,7 @@
      "ticker",
      "query"
     ]
-   ],
-   "path": "/api/v1/portfolios/{portfolio_id}/transactions",
-   "requestBody": null,
-   "responses": {
-    "200": {
-     "content": {
-      "application/json": {
-       "schema": {
-        "$ref": "#/components/schemas/JournalEventPage"
-       }
-      }
-     },
-     "description": "Matching events, newest first"
-    },
-    "404": {
-     "content": {
-      "application/json": {
-       "schema": {
-        "$ref": "#/components/schemas/ErrorResponse"
-       }
-      }
-     },
-     "description": "`portfolio_not_found`."
-    },
-    "422": {
-     "content": {
-      "application/json": {
-       "schema": {
-        "$ref": "#/components/schemas/ErrorResponse"
-       }
-      }
-     },
-     "description": "Invalid request data or a violated portfolio rule; inspect `code`."
-    }
-   }
+   ]
   },
   "list_portfolio_groups": {
    "method": "get",
@@ -6617,17 +6648,9 @@
   },
   "list_journal_events": {
    "properties": {
-    "end": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null,
-     "title": "End"
+    "portfolio_id": {
+     "title": "Portfolio Id",
+     "type": "string"
     },
     "event_type": {
      "anyOf": [
@@ -6641,19 +6664,17 @@
      "default": null,
      "title": "Event Type"
     },
-    "limit": {
-     "default": 50,
-     "title": "Limit",
-     "type": "integer"
-    },
-    "offset": {
-     "default": 0,
-     "title": "Offset",
-     "type": "integer"
-    },
-    "portfolio_id": {
-     "title": "Portfolio Id",
-     "type": "string"
+    "ticker": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Ticker"
     },
     "source_reference": {
      "anyOf": [
@@ -6679,7 +6700,7 @@
      "default": null,
      "title": "Start"
     },
-    "ticker": {
+    "end": {
      "anyOf": [
       {
        "type": "string"
@@ -6689,7 +6710,22 @@
       }
      ],
      "default": null,
-     "title": "Ticker"
+     "title": "End"
+    },
+    "offset": {
+     "default": 0,
+     "title": "Offset",
+     "type": "integer"
+    },
+    "limit": {
+     "default": 50,
+     "title": "Limit",
+     "type": "integer"
+    },
+    "include_legs": {
+     "default": false,
+     "title": "Include Legs",
+     "type": "boolean"
     }
    },
    "required": [
@@ -7316,5 +7352,5 @@
    "type": "object"
   }
  },
- "version": "0.2.0"
+ "version": "0.3.0"
 }

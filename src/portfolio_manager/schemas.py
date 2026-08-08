@@ -537,6 +537,13 @@ class JournalLegRead(ApiModel):
     unit_price: Decimal | None
     fx_rate: Decimal | None
     metadata: str | None = None
+    ticker: str | None = Field(
+        default=None,
+        description=(
+            "The instrument's ticker, resolved from `instrument_id` for display. Null on cash, "
+            "fee, and tax legs, which name no instrument."
+        ),
+    )
 
 
 class BalanceRead(ApiModel):
@@ -550,7 +557,7 @@ class BalanceRead(ApiModel):
 
 
 class JournalEventRead(ApiModel):
-    """A posted event header without its legs."""
+    """A posted event header. Legs are present only when the caller asked for them."""
 
     id: str
     portfolio_id: str
@@ -572,6 +579,13 @@ class JournalEventRead(ApiModel):
         )
     )
     created_at: datetime
+    legs: list[JournalLegRead] | None = Field(
+        default=None,
+        description=(
+            "This event's legs, present only when the request set `include_legs`. Null means "
+            "the legs were not requested, not that the event has none."
+        ),
+    )
 
 
 class JournalEventDetail(ApiModel):

@@ -381,14 +381,19 @@ async def list_journal_events(
     end: str | None = None,
     offset: int = 0,
     limit: int = 50,
+    include_legs: bool = False,
 ) -> dict[str, Any]:
     """Page the audit ledger, newest first, filtered by type, instrument, date, or broker ID.
 
     Reversals appear as their own events next to what they reversed, so the history shows what was
     undone instead of hiding it. `start` and `end` are RFC 3339 and inclusive. `source_reference`
     matches exactly and is the fastest way to reconcile against a broker statement.
+
+    Set `include_legs` to see what each event actually moved -- instrument, quantity, unit price,
+    and the cash, fee, and tax that settled it. Without it you get headers only, and answering
+    "what did I trade that day" would cost a `get_journal_event` call per row.
     """
-    params: dict[str, Any] = {"offset": offset, "limit": limit}
+    params: dict[str, Any] = {"offset": offset, "limit": limit, "include_legs": include_legs}
     for key, value in (
         ("event_type", event_type),
         ("ticker", ticker),

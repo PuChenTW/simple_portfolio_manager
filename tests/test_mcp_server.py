@@ -20,6 +20,7 @@ from portfolio_manager.mcp_server import (
     get_market_history,
     get_portfolio,
     get_technical_snapshot,
+    list_journal_events,
     list_portfolios,
     map_instrument_issuer,
     record_transaction,
@@ -304,3 +305,31 @@ async def test_the_inventory_resource_survives_an_unreachable_api(monkeypatch) -
     contents = await mcp_server.mcp.read_resource("portfolio://portfolios")
     text = list(contents)[0].content
     assert "Portfolios" in text
+
+
+async def test_list_journal_events_forwards_include_legs(mcp_client) -> None:
+    """Agents ask "what did I trade that day"; without legs the answer needs a call per row."""
+    portfolio = await create_portfolio(name="Legs", base_currency="USD")
+    portfolio_id = portfolio["id"]
+    await record_transaction(
+        portfolio_id=portfolio_id,
+        request_id="legs-cash",
+        transaction_type="deposit",
+        amount="10000",
+    )
+    await record_transaction(
+        portfolio_id=portfolio_id,
+        request_id="legs-buy",
+        transaction_type="buy",
+        ticker="AAPL",
+        quantity="10",
+        unit_price="140",
+    )
+
+    headers = await list_journal_events(portfolio_id=portfolio_id)
+    assert all(event["legs"] is None for event in headers["items"])
+
+    detailed = await list_journal_events(portfolio_id=portfolio_id, include_legs=True)
+    buy_event = next(item for item in detailed["items"] if item["event_type"] == "buy")
+    security = next(leg for leg in buy_event["legs"] if leg["leg_type"] == "security")
+    assert security["ticker"] == "AAPL"

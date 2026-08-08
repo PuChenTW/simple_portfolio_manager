@@ -173,6 +173,79 @@ def test_journal_filters_by_type_instrument_and_source_reference(harness) -> Non
     assert harness.client.get(f"{base}?source_reference=NOPE").json()["total"] == 0
 
 
+def test_legs_are_absent_unless_requested(harness) -> None:
+    """The default response must stay exactly what callers built against before `include_legs`."""
+    portfolio_id = harness.portfolio()
+    deposit(harness, portfolio_id)
+    buy(harness, portfolio_id)
+
+    listed = harness.client.get(f"/api/v1/portfolios/{portfolio_id}/transactions").json()
+    assert [event["legs"] for event in listed["items"]] == [None, None]
+
+
+def test_include_legs_matches_the_detail_endpoint(harness) -> None:
+    portfolio_id = harness.portfolio()
+    deposit(harness, portfolio_id)
+    buy(harness, portfolio_id)
+
+    base = f"/api/v1/portfolios/{portfolio_id}/transactions"
+    for event in harness.client.get(f"{base}?include_legs=true").json()["items"]:
+        detail = harness.client.get(f"{base}/{event['id']}").json()
+        assert event["legs"] == detail["legs"], "inline legs must not differ from the detail view"
+
+
+def test_include_legs_resolves_the_ticker_and_leaves_cash_legs_unnamed(harness) -> None:
+    portfolio_id = harness.portfolio()
+    deposit(harness, portfolio_id)
+    buy(harness, portfolio_id)
+
+    base = f"/api/v1/portfolios/{portfolio_id}/transactions"
+    events = harness.client.get(f"{base}?event_type=buy&include_legs=true").json()["items"]
+    legs = {leg["leg_type"]: leg for leg in events[0]["legs"]}
+
+    security = legs["security"]
+    assert security["ticker"] == "AAPL", "an opaque instrument_id is unreadable on its own"
+    assert Decimal(security["quantity_delta"]) == Decimal("10")
+    assert Decimal(security["unit_price"]) == Decimal("140")
+
+    # A cash leg names no instrument, so it reports no ticker rather than borrowing the trade's.
+    assert legs["cash"]["ticker"] is None
+    assert legs["cash"]["quantity_delta"] is None
+
+
+def test_include_legs_cost_does_not_grow_with_the_number_of_events(harness) -> None:
+    """The whole point of the flag: one page costs the same whether it holds 2 events or 12."""
+    from sqlalchemy import event as sa_event
+
+    portfolio_id = harness.portfolio()
+    deposit(harness, portfolio_id, amount="100000")
+    base = f"/api/v1/portfolios/{portfolio_id}/transactions"
+
+    def count_queries() -> int:
+        statements = []
+        engine = harness.session_factory.kw["bind"]
+
+        def record(conn, cursor, statement, parameters, context, executemany):
+            statements.append(statement)
+
+        sa_event.listen(engine, "before_cursor_execute", record)
+        try:
+            assert harness.client.get(f"{base}?include_legs=true&limit=200").status_code == 200
+        finally:
+            sa_event.remove(engine, "before_cursor_execute", record)
+        return len(statements)
+
+    buy(harness, portfolio_id, request_id="b-first")
+    small = count_queries()
+
+    for index in range(10):
+        buy(harness, portfolio_id, request_id=f"b-{index}")
+    large = count_queries()
+
+    assert harness.client.get(f"{base}").json()["total"] == 12, "the page really did grow"
+    assert small == large, f"query count grew from {small} to {large} as events were added"
+
+
 def test_missing_required_field_names_the_field(harness) -> None:
     portfolio_id = harness.portfolio()
     response = harness.client.post(

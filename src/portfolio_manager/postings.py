@@ -512,24 +512,53 @@ def reverse_transaction(
     return reversal
 
 
+def _row_to_leg(row: JournalLeg) -> Leg:
+    """Rebuild the in-memory leg from its stored row, renaming `leg_metadata` back to `metadata`."""
+    return Leg(
+        leg_type=LegType(row.leg_type),
+        currency=row.currency,
+        account_role=row.account_role,
+        amount_delta=row.amount_delta,
+        quantity_delta=row.quantity_delta,
+        instrument_id=row.instrument_id,
+        unit_price=row.unit_price,
+        fx_rate=row.fx_rate,
+        metadata=row.leg_metadata,
+    )
+
+
 def _legs_of(session: Session, event_id: str) -> list[Leg]:
     rows = session.scalars(
         select(JournalLeg).where(JournalLeg.event_id == event_id).order_by(JournalLeg.id)
     ).all()
-    return [
-        Leg(
-            leg_type=LegType(row.leg_type),
-            currency=row.currency,
-            account_role=row.account_role,
-            amount_delta=row.amount_delta,
-            quantity_delta=row.quantity_delta,
-            instrument_id=row.instrument_id,
-            unit_price=row.unit_price,
-            fx_rate=row.fx_rate,
-            metadata=row.leg_metadata,
-        )
-        for row in rows
-    ]
+    return [_row_to_leg(row) for row in rows]
+
+
+def legs_for_events(session: Session, event_ids: list[str]) -> dict[str, list[Leg]]:
+    """Legs for a whole page of events in one query, keyed by event id.
+
+    Reading a page and then fetching each event's legs individually costs a query per row; a
+    caller rendering a day of activity pays for the page twice over. Events with no legs are
+    simply absent from the mapping, so callers use `.get(event_id, [])`.
+    """
+    if not event_ids:
+        return {}
+
+    legs_by_event: dict[str, list[Leg]] = {}
+    for row in session.scalars(
+        select(JournalLeg).where(JournalLeg.event_id.in_(event_ids)).order_by(JournalLeg.id)
+    ).all():
+        legs_by_event.setdefault(row.event_id, []).append(_row_to_leg(row))
+    return legs_by_event
+
+
+def ticker_index(session: Session) -> dict[str, str]:
+    """Map every instrument id to its ticker, so a page of legs resolves in one query.
+
+    Legs store `instrument_id`, a surrogate nobody can read. Resolving one ticker per leg would
+    reintroduce the per-row cost this module exists to avoid.
+    """
+    return dict(session.execute(select(Instrument.instrument_id, Instrument.ticker)).all())
 
 
 def event_detail(session: Session, portfolio_id: str, event_id: str) -> dict:

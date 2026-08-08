@@ -1,7 +1,7 @@
 """The published API and MCP surface must not change without a version bump.
 
 `legacy_api_baseline.json` is a frozen capture of the 32 operations, 67 response models, and 32
-MCP tools published at version 0.2.0. Agents and generated clients are built against that
+MCP tools published at version 0.3.0. Agents and generated clients are built against that
 contract, so a change here breaks callers that cannot be updated in lockstep.
 
 Adding operations, models, or tools is fine and expected. Changing or removing an existing one is
@@ -13,6 +13,13 @@ and `list_cash_transactions` along with their tables. Those were independent led
 the position without touching cash, so the two could disagree and nothing recorded which was
 right. `record_transaction` is now the only write path, and it posts a position and its settlement
 in one transaction or not at all.
+
+0.3.0 added `include_legs` to `list_journal_events`, a `legs` field to `JournalEventRead`, and a
+`ticker` field to `JournalLegRead`, so reading a day of activity costs one request instead of one
+per event. Every addition is optional and defaults to the previous behavior, so no caller has to
+change -- but the assertions below compare parameter sets and schemas for equality, not
+containment, and a purely additive change still has to be declared. That strictness is the point:
+it forces the addition to be a decision rather than a diff nobody noticed.
 """
 
 import asyncio

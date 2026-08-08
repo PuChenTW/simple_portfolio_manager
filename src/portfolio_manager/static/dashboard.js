@@ -13,7 +13,15 @@ const state = {
   perfRangeMode: "all",
   perfCustomStart: null,
   perfCustomEnd: null,
+  // The journal pages independently of its tab: paging through it must not re-fetch the
+  // summary, the performance series, and one instrument profile per position.
+  journalOffset: 0,
+  // Which events are showing their legs, by event id. Kept across a page load so the panel
+  // does not silently collapse everything when the user pages back and forth.
+  journalExpanded: new Set(),
 };
+
+const JOURNAL_PAGE_SIZE = 25;
 
 const COLORS = ["#12746e", "#e1904b", "#4d72b8", "#9b6cb4", "#579c70", "#c06672", "#697886"];
 const elements = {
@@ -79,6 +87,9 @@ const elements = {
   issuerSubmit: document.querySelector("#issuer-submit"),
   journalBody: document.querySelector("#journal-body"),
   journalCount: document.querySelector("#journal-count"),
+  journalPage: document.querySelector("#journal-page"),
+  journalPrev: document.querySelector("#journal-prev"),
+  journalNext: document.querySelector("#journal-next"),
   // Consolidation
   groupMissing: document.querySelector("#group-missing"),
   groupContent: document.querySelector("#group-content"),
@@ -780,11 +791,98 @@ function statusBadge(event) {
   return badge("已入帳", "badge--internal");
 }
 
+// Leg vocabulary, kept beside FLOW_LABELS so the two read the same way. A leg type nobody
+// translated still shows its raw value rather than vanishing.
+const LEG_TYPE_LABELS = {
+  security: "證券",
+  cash: "現金",
+  fee: "手續費",
+  tax: "稅金",
+  income: "收益",
+  receivable: "應收",
+  other: "其他",
+};
+
+// A capitalized fee or tax carries no amount_delta -- the money is already inside the security
+// leg -- so its figure lives in the leg metadata. Showing a fee row with every field blank
+// would read as "no fee", which is the opposite of what the ledger recorded.
+function legAmount(leg) {
+  if (leg.amount_delta !== null && leg.amount_delta !== undefined) {
+    return formatMoney(leg.amount_delta, leg.currency);
+  }
+  if (!leg.metadata) return "—";
+  try {
+    const { amount } = JSON.parse(leg.metadata);
+    return amount === undefined ? "—" : `${formatMoney(amount, leg.currency)}（已計入成本）`;
+  } catch {
+    return "—";
+  }
+}
+
+// A leg's amounts are in the leg's own currency, not the portfolio's: a USD fee on a TWD
+// portfolio must not be relabelled TWD.
+function renderLegs(legs) {
+  const list = element("div", "legs");
+  if (!legs || !legs.length) {
+    list.append(element("p", "muted", "這筆事件沒有分錄。"));
+    return list;
+  }
+  legs.forEach((leg) => {
+    const row = element("div", "legs__row");
+    // A placeholder holds the column open on wide screens and is hidden once the row stacks.
+    const field = (className, text) => {
+      const node = element("span", className, text);
+      if (text === "—") node.classList.add("legs__empty");
+      return node;
+    };
+    row.append(element("span", "legs__type", LEG_TYPE_LABELS[leg.leg_type] ?? leg.leg_type));
+    row.append(field("legs__ticker", leg.ticker ?? "—"));
+    row.append(field("legs__number", formatDecimal(leg.quantity_delta)));
+    row.append(
+      field(
+        "legs__number",
+        leg.unit_price === null || leg.unit_price === undefined
+          ? "—"
+          : formatMoney(leg.unit_price, leg.currency)
+      )
+    );
+    const amount = field("legs__number", legAmount(leg));
+    if (isNegative(leg.amount_delta)) amount.classList.add("value--negative");
+    row.append(amount);
+    list.append(row);
+  });
+  return list;
+}
+
+function toggleJournalRow(eventId) {
+  if (state.journalExpanded.has(eventId)) state.journalExpanded.delete(eventId);
+  else state.journalExpanded.add(eventId);
+  renderJournal(state.journalPage);
+}
+
 function renderJournal(page) {
+  // Held so an expand/collapse can re-render without re-fetching the page.
+  state.journalPage = page;
   clear(elements.journalBody);
-  elements.journalCount.textContent = `共 ${page.total} 筆，顯示最近 ${page.items.length} 筆`;
+
+  const pageCount = Math.max(1, Math.ceil(page.total / page.limit));
+  const current = Math.floor(page.offset / page.limit) + 1;
+  elements.journalCount.textContent = `共 ${page.total} 筆`;
+  elements.journalPage.textContent = `第 ${current} / ${pageCount} 頁`;
+  elements.journalPrev.disabled = page.offset === 0;
+  elements.journalNext.disabled = page.offset + page.items.length >= page.total;
+
   page.items.forEach((event) => {
+    const expanded = state.journalExpanded.has(event.id);
     const row = document.createElement("tr");
+
+    const toggle = element("button", "button--link", expanded ? "▾" : "▸");
+    toggle.type = "button";
+    toggle.setAttribute("aria-expanded", String(expanded));
+    toggle.setAttribute("aria-label", expanded ? "收合分錄" : "展開分錄");
+    toggle.addEventListener("click", () => toggleJournalRow(event.id));
+    row.append(createCell(toggle));
+
     row.append(createCell(formatTime(event.occurred_at)));
     row.append(createCell(event.event_type));
     const [label, className] = FLOW_LABELS[event.flow_classification] ?? ["—", "badge--none"];
@@ -794,16 +892,49 @@ function renderJournal(page) {
     row.append(createCell(event.source_reference || event.source || "—"));
     row.append(createCell(statusBadge(event)));
     elements.journalBody.append(row);
+
+    if (!expanded) return;
+    const detail = document.createElement("tr");
+    const cell = createCell(renderLegs(event.legs), "legs-cell");
+    cell.colSpan = 6;
+    detail.append(cell);
+    elements.journalBody.append(detail);
   });
   elements.qEvents.textContent = String(page.total);
 }
+
+async function loadJournal(offset) {
+  const id = encodeURIComponent(state.selectedId);
+  const requestId = ++state.requestId;
+  const page = await fetchJson(
+    `api/v1/portfolios/${id}/transactions` +
+      `?limit=${JOURNAL_PAGE_SIZE}&offset=${offset}&include_legs=true`
+  );
+  if (requestId !== state.requestId) return;
+  state.journalOffset = offset;
+  renderJournal(page);
+}
+
+function pageJournal(delta) {
+  const next = state.journalOffset + delta * JOURNAL_PAGE_SIZE;
+  if (next < 0) return;
+  loadJournal(next).catch((error) => {
+    showStatus(error.message ?? "無法取得帳務事件，請稍後再試。", true);
+  });
+}
+
+elements.journalPrev.addEventListener("click", () => pageJournal(-1));
+elements.journalNext.addEventListener("click", () => pageJournal(1));
 
 async function loadQuality() {
   const id = encodeURIComponent(state.selectedId);
   const { range, history } = await resolveHistoryRange(id);
   const [summary, journal, performance] = await Promise.all([
     fetchJson(`api/v1/portfolios/${id}/summary`),
-    fetchJson(`api/v1/portfolios/${id}/transactions?limit=25`),
+    fetchJson(
+      `api/v1/portfolios/${id}/transactions` +
+        `?limit=${JOURNAL_PAGE_SIZE}&offset=${state.journalOffset}&include_legs=true`
+    ),
     fetchJson(`api/v1/portfolios/${id}/performance?${range}`),
   ]);
 
@@ -918,6 +1049,10 @@ elements.tabs.forEach((tab) => {
 elements.select.addEventListener("change", () => {
   state.selectedId = elements.select.value;
   state.loaded = {};
+  // Page 3 of one portfolio's journal says nothing about another's, and the expanded event
+  // ids do not exist there at all.
+  state.journalOffset = 0;
+  state.journalExpanded.clear();
   loadSummary();
   if (state.tab !== "overview") loadTab(state.tab);
 });

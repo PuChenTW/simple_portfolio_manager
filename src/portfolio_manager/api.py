@@ -44,9 +44,11 @@ from .performance import (
 from .postings import (
     TransactionRequest,
     event_detail,
+    legs_for_events,
     list_events,
     record_transaction,
     reverse_transaction,
+    ticker_index,
 )
 from .schemas import (
     BalanceRead,
@@ -310,7 +312,7 @@ class StripPrefixMiddleware:
 
 app = FastAPI(
     title="Local Portfolio Manager",
-    version="0.2.0",
+    version="0.3.0",
     summary="Agent-friendly accounting for cash, stocks, and crypto portfolios",
     description=API_DESCRIPTION,
     openapi_tags=OPENAPI_TAGS,
@@ -909,6 +911,15 @@ def read_journal_events(
     end: Annotated[datetime | None, Query(description="Inclusive upper bound.")] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    include_legs: Annotated[
+        bool,
+        Query(
+            description=(
+                "Return each event's legs inline, instead of one detail request per row. Legs "
+                "for the whole page load in a single query."
+            )
+        ),
+    ] = False,
 ) -> JournalEventPage:
     """
     Read the audit ledger. Reversals appear as their own events alongside what they reversed.
@@ -924,14 +935,27 @@ def read_journal_events(
         offset=offset,
         limit=limit,
     )
-    # Resolve the flow classification for the whole page in one query: a human ruling outranks
-    # the value derived from the event type, and a reader cannot tell them apart without this.
-    return JournalEventPage(
-        items=[_journal_event_read(event) for event in events],
-        total=total,
-        offset=offset,
-        limit=limit,
+    items = (
+        _events_with_legs(session, events)
+        if include_legs
+        else [_journal_event_read(event) for event in events]
     )
+    return JournalEventPage(items=items, total=total, offset=offset, limit=limit)
+
+
+def _events_with_legs(session: Session, events: list) -> list[JournalEventRead]:
+    """Attach every event's legs, at a cost that does not grow with the number of events."""
+    legs_by_event = legs_for_events(session, [event.id for event in events])
+    tickers = ticker_index(session)
+    items = []
+    for event in events:
+        item = _journal_event_read(event)
+        item.legs = [
+            _journal_leg_read(leg, tickers.get(leg.instrument_id))
+            for leg in legs_by_event.get(event.id, [])
+        ]
+        items.append(item)
+    return items
 
 
 @app.get(
@@ -961,20 +985,11 @@ def _event_detail_response(
     detail = event_detail(session, portfolio_id, event_id)
     report = detail["balance"]
     event_row = detail["event"]
+    tickers = ticker_index(session)
     return JournalEventDetail(
         event=_journal_event_read(event_row),
         legs=[
-            JournalLegRead(
-                leg_type=leg.leg_type.value,
-                account_role=leg.account_role,
-                currency=leg.currency,
-                instrument_id=leg.instrument_id,
-                quantity_delta=leg.quantity_delta,
-                amount_delta=leg.amount_delta,
-                unit_price=leg.unit_price,
-                fx_rate=leg.fx_rate,
-                metadata=leg.metadata,
-            )
+            _journal_leg_read(leg, tickers.get(leg.instrument_id))
             for leg in detail["legs"]
         ],
         balance=(
@@ -1159,20 +1174,7 @@ def _preview_response(preview) -> CorporateActionPreview:
         cash_in_lieu=preview.cash_in_lieu,
         fractional_handling=preview.fractional_handling,
         cost_basis_unresolved=preview.cost_basis_unresolved,
-        legs=[
-            JournalLegRead(
-                leg_type=leg.leg_type.value,
-                account_role=leg.account_role,
-                currency=leg.currency,
-                instrument_id=leg.instrument_id,
-                quantity_delta=leg.quantity_delta,
-                amount_delta=leg.amount_delta,
-                unit_price=leg.unit_price,
-                fx_rate=leg.fx_rate,
-                metadata=leg.metadata,
-            )
-            for leg in preview.legs
-        ],
+        legs=[_journal_leg_read(leg) for leg in preview.legs],
         warnings=preview.warnings,
     )
 
@@ -1590,13 +1592,34 @@ def get_portfolio_performance(
     )
 
 
+def _journal_leg_read(leg, ticker: str | None = None) -> JournalLegRead:
+    """Serialize one leg. `ticker` is resolved by the caller, which holds the whole page's index."""
+    return JournalLegRead(
+        leg_type=leg.leg_type.value,
+        account_role=leg.account_role,
+        currency=leg.currency,
+        instrument_id=leg.instrument_id,
+        quantity_delta=leg.quantity_delta,
+        amount_delta=leg.amount_delta,
+        unit_price=leg.unit_price,
+        fx_rate=leg.fx_rate,
+        metadata=leg.metadata,
+        ticker=ticker,
+    )
+
+
+# Fields the ORM row does not carry: one is derived from the event type, the other is attached
+# by the caller only when legs were requested.
+_NOT_ON_EVENT_ROW = frozenset({"flow_classification", "legs"})
+
+
 def _journal_event_read(event) -> JournalEventRead:
     """A journal event with the flow classification implied by its type."""
     return JournalEventRead(
         **{
             field: getattr(event, field)
             for field in JournalEventRead.model_fields
-            if field != "flow_classification"
+            if field not in _NOT_ON_EVENT_ROW
         },
         flow_classification=derived_flow(event.event_type),
     )
