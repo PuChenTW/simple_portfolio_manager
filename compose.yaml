@@ -56,5 +56,18 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  portfolio-snapshot-cron:
+    build:
+      context: .
+    command: ["python", "-m", "portfolio_manager.snapshot_cron"]
+    environment:
+      PORTFOLIO_API_BASE_URL: http://portfolio-manager:8001
+      PORTFOLIO_SNAPSHOT_CRON_HOUR_UTC: "${PORTFOLIO_SNAPSHOT_CRON_HOUR_UTC:-0}"
+      PORTFOLIO_SNAPSHOT_LOOKBACK_DAYS: "${PORTFOLIO_SNAPSHOT_LOOKBACK_DAYS:-7}"
+    depends_on:
+      portfolio-manager:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   portfolio-data:

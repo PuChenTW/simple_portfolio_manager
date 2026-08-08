@@ -181,12 +181,21 @@ docker compose up --build -d
 docker compose ps
 ```
 
-This starts two services from the same image: the REST API at `http://127.0.0.1:8001` and the
-MCP server (Streamable HTTP) at `http://127.0.0.1:8002/mcp`. The MCP service calls the API over
-the Docker network and starts only after the API is healthy. Both ports are bound to loopback
-only. SQLite data is persisted in the `portfolio-data` named volume, so normal container rebuilds
-and restarts keep the portfolio. Stop the services with `docker compose down`; add `--volumes`
-only when you intentionally want to delete all portfolio data.
+This starts three services from the same image: the REST API at `http://127.0.0.1:8001`, the
+MCP server (Streamable HTTP) at `http://127.0.0.1:8002/mcp`, and a snapshot-cron service with no
+exposed port. Both the MCP and cron services call the API over the Docker network and start only
+after the API is healthy. Exposed ports are bound to loopback only. SQLite data is persisted in
+the `portfolio-data` named volume, so normal container rebuilds and restarts keep the portfolio.
+Stop the services with `docker compose down`; add `--volumes` only when you intentionally want to
+delete all portfolio data.
+
+The cron service lists every portfolio and rebuilds its valuation snapshots once a day (default
+00:00 UTC, `PORTFOLIO_SNAPSHOT_CRON_HOUR_UTC`) plus once at container startup, so daily NAV and
+performance figures stay current without a manual `rebuild-snapshots` run. Each run covers a
+rolling window (default the last 7 days, `PORTFOLIO_SNAPSHOT_LOOKBACK_DAYS`) rather than tracking
+a last-run date: `rebuild_snapshots` skips dates that already have a snapshot, so the overlap is
+cheap and a missed run or a late price correction is picked up automatically. Watch its output
+with `docker compose logs portfolio-snapshot-cron`.
 
 The dashboard uses relative paths for its assets and API calls, so it can be mounted behind a
 reverse proxy under a subpath (e.g. `https://host/portfolio-manager/`). Set `PORTFOLIO_URL_PREFIX`
