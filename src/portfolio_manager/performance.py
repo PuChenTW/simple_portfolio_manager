@@ -40,15 +40,15 @@ TWR_METHOD = "modified-dietz-daily-v1"
 XIRR_METHOD = "newton-bisection-actual-365-v1"
 
 TWR_METHOD_DESCRIPTION = (
-    "Daily sub-period returns linked geometrically. Each day's return is "
-    "(end - start - flow) / (start + weighted flow), with same-day flows weighted at one half "
-    "because the pre-journal data records a date but not a time of day. A day whose "
-    "denominator is zero contributes no return rather than being treated as a total loss."
+    "將每日子期間報酬以幾何方式串連。每日報酬為 (期末淨值 - 期初淨值 - 現金流) / "
+    "(期初淨值 + 加權現金流)，其中當日發生的現金流以一半權重計入，"
+    "因為 journal 之前的資料只記錄日期、沒有時間點。若分母為零，"
+    "該日視為無報酬貢獻，而非全額虧損。"
 )
 XIRR_METHOD_DESCRIPTION = (
-    "The rate at which external cash flows and the ending value discount to zero, solved by "
-    "Newton's method with a bisection fallback. Contributions are negative and withdrawals plus "
-    "the terminal value positive; day counts are actual over 365."
+    "使外部現金流與期末淨值折現後總和為零的利率，以牛頓法求解，"
+    "並在牛頓法失敗時改用二分法。投入資金記為負值，提領與期末淨值記為正值；"
+    "天數採實際天數並以 365 天為基準年化。"
 )
 
 # A flow weight of one half assumes a flow arrives mid-day. The legacy rows carry a date only,
