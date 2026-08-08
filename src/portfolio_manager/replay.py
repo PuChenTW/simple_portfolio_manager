@@ -143,6 +143,56 @@ def replay_state(
     )
 
 
+def flows_by_bucket(
+    session: Session,
+    portfolio_id: str,
+    boundaries: list[datetime],
+) -> list[FlowTotals]:
+    """Flow totals for each half-open window between consecutive `boundaries`.
+
+    Equivalent to calling `replay_state(since=boundaries[i-1] + 1us, cutoff=boundaries[i])` for
+    every adjacent pair and reading `.flows`, but folding the journal once instead of once per
+    window. Performance measurement needs a flow figure per sub-period, and the per-window call
+    re-folded the whole journal each time -- O(events x windows) for a result that one ordered
+    pass produces.
+
+    Returns one entry per gap, so `len(result) == len(boundaries) - 1` and `result[i]` covers
+    `(boundaries[i], boundaries[i + 1]]`. Events outside every window are folded for their
+    reversal links but contribute to no bucket.
+    """
+    if len(boundaries) < 2:
+        return []
+
+    edges = [_aware(edge) for edge in boundaries]
+    buckets = [FlowTotals() for _ in range(len(edges) - 1)]
+    # Coverage is assessed over the whole period by the caller; these windows only need flows.
+    sink = ReplayCoverage()
+
+    # A reversal classifies as the event it undoes, which can sit before the first boundary, so
+    # the type index spans the whole journal rather than the windowed slice.
+    events = _events_through(session, portfolio_id, edges[-1])
+    reversed_types = {event.id: event.event_type for event, _ in events}
+
+    index = 0
+    for event, legs in events:
+        occurred = _aware(event.occurred_at)
+        if occurred <= edges[0]:
+            continue
+        # Boundaries ascend and so do events, so the cursor only ever moves forward.
+        while index < len(buckets) and occurred > edges[index + 1]:
+            index += 1
+        if index >= len(buckets):
+            break
+
+        cash_delta = ZERO
+        for leg in legs:
+            if leg.leg_type == LegType.CASH.value:
+                cash_delta += leg.amount_delta or ZERO
+        _accumulate_flows(event, legs, cash_delta, buckets[index], sink, reversed_types)
+
+    return buckets
+
+
 def _fold_event(
     event: JournalEvent,
     legs: list[JournalLeg],
@@ -186,7 +236,12 @@ def _fold_security_leg(
     if quantity_delta > ZERO:
         total_cost = position.cost_basis + amount_delta
         position.quantity += quantity_delta
-        position.average_cost = total_cost / position.quantity
+        # A buy can land on a zero quantity only if the position was already negative, which the
+        # ledger forbids. Guard the division anyway: a rebuild that crashes takes out every later
+        # snapshot, and a flat position with no shares has no average cost to report.
+        position.average_cost = (
+            total_cost / position.quantity if position.quantity != ZERO else ZERO
+        )
     elif quantity_delta < ZERO:
         sold = -quantity_delta
         position.realized_pnl += -amount_delta - sold * position.average_cost
@@ -280,8 +335,10 @@ def _events_through(
 ) -> list[tuple[JournalEvent, list[JournalLeg]]]:
     """Every event at or before the cutoff, oldest first, each with its legs.
 
-    Ordering ties break on `id` so that two events sharing a timestamp always fold in the same
-    sequence -- without it, a rebuild could produce a different average cost than the original.
+    Ties break on `created_at` -- the order the events were actually posted -- so the replay
+    folds them exactly as `postings` did. Breaking ties on `id` instead orders same-timestamp
+    events by a random UUID, which can fold a same-day round trip's sell ahead of the buy that
+    supplied it and drive the position negative.
     """
     events = list(
         session.scalars(
@@ -290,7 +347,7 @@ def _events_through(
                 JournalEvent.portfolio_id == portfolio_id,
                 JournalEvent.occurred_at <= _aware(cutoff),
             )
-            .order_by(JournalEvent.occurred_at, JournalEvent.id)
+            .order_by(JournalEvent.occurred_at, JournalEvent.created_at, JournalEvent.id)
         ).all()
     )
     if not events:

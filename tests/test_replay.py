@@ -18,7 +18,7 @@ from portfolio_manager.corporate_actions import (
 from portfolio_manager.journal import EventType
 from portfolio_manager.models import CashBalance, Position
 from portfolio_manager.postings import TransactionRequest, record_transaction, reverse_transaction
-from portfolio_manager.replay import replay_state
+from portfolio_manager.replay import flows_by_bucket, replay_state
 
 FUTURE = datetime(2030, 1, 1, tzinfo=UTC)
 DAY1 = datetime(2026, 3, 2, tzinfo=UTC)
@@ -88,6 +88,53 @@ def test_replay_reproduces_the_live_projections(session, funded) -> None:
     assert replayed.quantity == stored.quantity
     assert replayed.average_cost == stored.average_cost
     assert replayed.realized_pnl == stored.realized_pnl
+
+
+@pytest.mark.parametrize("attempt", range(12))
+def test_same_day_round_trip_replays_in_posting_order(session, harness, attempt) -> None:
+    """A buy and sell sharing a timestamp must fold in the order they were posted.
+
+    Event ids are random UUIDs, so breaking ties on the id folds a same-day round trip in an
+    arbitrary order. Fold the sell first and the position goes negative, then the buy brings it
+    back to flat and divides by zero. Repeating the case makes the ordering coin-flip reliable.
+    """
+    portfolio_id = harness.portfolio()
+    harness.client.get("/api/v1/market/instruments/AAPL")
+    post(
+        session,
+        portfolio_id,
+        request_id=f"dep-{attempt}",
+        event_type=EventType.DEPOSIT,
+        amount=Decimal("20000"),
+        occurred_at=DAY1,
+    )
+    post(
+        session,
+        portfolio_id,
+        request_id=f"rt-buy-{attempt}",
+        event_type=EventType.BUY,
+        ticker="AAPL",
+        quantity=Decimal("2"),
+        unit_price=Decimal("100"),
+        occurred_at=DAY2,
+    )
+    post(
+        session,
+        portfolio_id,
+        request_id=f"rt-sell-{attempt}",
+        event_type=EventType.SELL,
+        ticker="AAPL",
+        quantity=Decimal("2"),
+        unit_price=Decimal("101"),
+        occurred_at=DAY2,
+    )
+
+    result = replay_state(session, portfolio_id, FUTURE)
+
+    position = position_for(result, "AAPL")
+    assert position.quantity == Decimal("0")
+    assert position.average_cost == Decimal("0")
+    assert position.realized_pnl == Decimal("2")
 
 
 def test_replay_stops_at_the_cutoff(session, funded) -> None:
@@ -246,6 +293,98 @@ def test_flow_window_bounds_totals_but_not_balances(session, funded) -> None:
     result = replay_state(session, funded, FUTURE, since=DAY2)
     assert result.cash == Decimal("25000"), "cash carries the pre-window deposit"
     assert result.flows.external_in == Decimal("5000"), "flows count only the window"
+
+
+def bucketed(session, portfolio_id, boundaries) -> list[Decimal]:
+    return [item.net_external for item in flows_by_bucket(session, portfolio_id, boundaries)]
+
+
+def per_window(session, portfolio_id, boundaries) -> list[Decimal]:
+    """The same figures the one-pass version replaces, computed one replay per window."""
+    return [
+        replay_state(
+            session, portfolio_id, end, since=start + timedelta(microseconds=1)
+        ).flows.net_external
+        for start, end in zip(boundaries, boundaries[1:], strict=False)
+    ]
+
+
+def test_bucketed_flows_match_a_replay_per_window(session, funded) -> None:
+    """The batched pass is an optimization: it must agree with the per-window replay exactly."""
+    for index, (day, amount) in enumerate(
+        [(DAY2, "5000"), (DAY3, "-2000"), (DAY3, "750")]
+    ):
+        post(
+            session,
+            funded,
+            request_id=f"flow-{index}",
+            event_type=EventType.DEPOSIT if Decimal(amount) > 0 else EventType.WITHDRAWAL,
+            amount=abs(Decimal(amount)),
+            occurred_at=day,
+        )
+
+    boundaries = [DAY1, DAY2, DAY3, FUTURE]
+    assert bucketed(session, funded, boundaries) == per_window(session, funded, boundaries)
+
+
+def test_bucketed_flows_land_in_the_window_that_contains_them(session, funded) -> None:
+    """A flow belongs to the window ending at or after it, never a neighbouring one."""
+    post(
+        session,
+        funded,
+        request_id="dep-day3",
+        event_type=EventType.DEPOSIT,
+        amount=Decimal("5000"),
+        occurred_at=DAY3,
+    )
+
+    # DAY1's opening deposit precedes the first boundary, so no window may claim it.
+    assert bucketed(session, funded, [DAY1, DAY2, DAY3]) == [Decimal("0"), Decimal("5000")]
+
+
+def test_an_event_on_a_boundary_belongs_to_the_window_it_closes(session, funded) -> None:
+    """Windows are half-open on the left, matching the `since + 1us` convention they replace."""
+    post(
+        session,
+        funded,
+        request_id="dep-boundary",
+        event_type=EventType.DEPOSIT,
+        amount=Decimal("1000"),
+        occurred_at=DAY2,
+    )
+
+    boundaries = [DAY1, DAY2, DAY3]
+    assert bucketed(session, funded, boundaries) == [Decimal("1000"), Decimal("0")]
+    assert bucketed(session, funded, boundaries) == per_window(session, funded, boundaries)
+
+
+def test_a_reversal_across_a_boundary_keeps_its_original_classification(session, funded) -> None:
+    """A reversal classifies as the event it undoes, which may sit before the first window.
+
+    The batched pass indexes event types over the whole journal for exactly this case; indexing
+    only the windowed slice would push the reversal into `unknown` and drop it from the flow.
+    """
+    posted = post(
+        session,
+        funded,
+        request_id="dep-early",
+        event_type=EventType.DEPOSIT,
+        amount=Decimal("3000"),
+        occurred_at=DAY1,
+    )
+    # A reversal is stamped when it is written, which puts it after every dated event above.
+    reverse_transaction(session, funded, posted.id, request_id="rev-late")
+
+    # The deposit sits before the first boundary; only its reversal falls inside a window, so it
+    # must still read as external capital leaving rather than as an unclassified event.
+    boundaries = [DAY2, DAY3, FUTURE]
+    assert bucketed(session, funded, boundaries) == [Decimal("0"), Decimal("-3000")]
+    assert bucketed(session, funded, boundaries) == per_window(session, funded, boundaries)
+
+
+def test_bucketed_flows_need_two_boundaries(session, funded) -> None:
+    assert flows_by_bucket(session, funded, []) == []
+    assert flows_by_bucket(session, funded, [DAY1]) == []
 
 
 def test_a_split_preserves_total_cost_basis_through_replay(session, funded) -> None:

@@ -15,14 +15,14 @@ is not a smaller truth -- it is a different number wearing the same label.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time
 from decimal import Decimal, DivisionByZero, InvalidOperation
 
 from sqlalchemy.orm import Session
 
 from .errors import DomainError
 from .models import PortfolioValuationSnapshot
-from .replay import replay_state
+from .replay import FlowTotals, flows_by_bucket, replay_state
 from .services import ZERO, get_portfolio
 from .valuation import (
     CALCULATION_VERSION,
@@ -134,13 +134,19 @@ def calculate_performance(
     if len(snapshots) < 2:
         return _insufficient(portfolio, start_date, end_date, snapshots, coverage)
 
-    daily = _daily_returns(session, portfolio_id, snapshots)
+    # One ordered pass over the journal serves every sub-period; both TWR and XIRR read the same
+    # figures, so a flow can never be counted one way in one and another way in the other.
+    buckets = _flow_buckets(session, portfolio_id, snapshots)
+    flows_between = [bucket.net_external for bucket in buckets]
+
+    daily = _daily_returns(snapshots, flows_between)
     twr = _link(daily)
     opening, closing = snapshots[0], snapshots[-1]
-    window = _window_flows(session, portfolio_id, snapshots)
+    # The period breakdown is the same flows seen whole, so it is summed rather than re-read.
+    window = _window_flows(buckets)
 
     xirr, xirr_reason = _xirr(
-        session, portfolio_id, snapshots, opening.total_value, closing.total_value
+        snapshots, flows_between, opening.total_value, closing.total_value
     )
     if twr is None:
         coverage.warnings.append(
@@ -175,14 +181,14 @@ def calculate_performance(
 
 
 def _daily_returns(
-    session: Session, portfolio_id: str, snapshots: list[PortfolioValuationSnapshot]
+    snapshots: list[PortfolioValuationSnapshot], flows_between: list[Decimal]
 ) -> list[DailyReturn]:
     """Modified Dietz return for each consecutive pair of snapshots."""
     results: list[DailyReturn] = []
-    for previous, current in zip(snapshots, snapshots[1:], strict=False):
+    for index, (previous, current) in enumerate(zip(snapshots, snapshots[1:], strict=False)):
         start_value = previous.total_value
         end_value = current.total_value
-        flow = _external_flow_between(session, portfolio_id, previous, current)
+        flow = flows_between[index]
 
         denominator = start_value + flow * MIDDAY_WEIGHT
         if denominator == ZERO:
@@ -240,9 +246,8 @@ def _annualize(twr: Decimal | None, start: date, end: date) -> Decimal | None:
 
 
 def _xirr(
-    session: Session,
-    portfolio_id: str,
     snapshots: list[PortfolioValuationSnapshot],
+    flows_between: list[Decimal],
     beginning_value: Decimal,
     ending_value: Decimal,
 ) -> tuple[Decimal | None, str | None]:
@@ -254,8 +259,8 @@ def _xirr(
     # The opening value is capital already at risk, so it enters as an outflow from the investor.
     if beginning_value != ZERO:
         flows.append((opening, -beginning_value))
-    for previous, current in zip(snapshots, snapshots[1:], strict=False):
-        flow = _external_flow_between(session, portfolio_id, previous, current)
+    for index, current in enumerate(snapshots[1:]):
+        flow = flows_between[index]
         if flow != ZERO:
             flows.append((_date_of(current), -flow))
     if ending_value != ZERO:
@@ -335,37 +340,29 @@ def _bisect_xirr(net_present_value, tolerance: float) -> Decimal | None:
     return None
 
 
-def _external_flow_between(
-    session: Session,
-    portfolio_id: str,
-    previous: PortfolioValuationSnapshot,
-    current: PortfolioValuationSnapshot,
-) -> Decimal:
-    """Net investor capital that moved after one snapshot's cutoff and up to the next.
+def _flow_buckets(
+    session: Session, portfolio_id: str, snapshots: list[PortfolioValuationSnapshot]
+) -> list[FlowTotals]:
+    """Flows moving between each consecutive pair of snapshot cutoffs.
 
     Read from the journal rather than differenced from the stored cumulative totals, so a gap in
     the snapshot series cannot silently absorb a flow into the wrong day.
     """
-    window_start = _aware_utc(previous.valuation_as_of) + timedelta(microseconds=1)
-    return replay_state(
-        session, portfolio_id, _aware_utc(current.valuation_as_of), since=window_start
-    ).flows.net_external
+    boundaries = [_aware_utc(item.valuation_as_of) for item in snapshots]
+    return flows_by_bucket(session, portfolio_id, boundaries)
 
 
-def _window_flows(
-    session: Session, portfolio_id: str, snapshots: list[PortfolioValuationSnapshot]
-) -> dict[str, Decimal]:
-    """Flow components across the whole period, for the informational breakdown."""
-    window_start = _aware_utc(snapshots[0].valuation_as_of) + timedelta(microseconds=1)
-    flows = replay_state(
-        session, portfolio_id, _aware_utc(snapshots[-1].valuation_as_of), since=window_start
-    ).flows
+def _window_flows(buckets: list[FlowTotals]) -> dict[str, Decimal]:
+    """Flow components across the whole period, for the informational breakdown.
+
+    The buckets partition the period, so summing them equals one replay across the whole window.
+    """
     return {
-        "inflows": flows.external_in,
-        "outflows": flows.external_out,
-        "income": flows.income,
-        "fees": flows.fees,
-        "taxes": flows.taxes,
+        "inflows": sum((item.external_in for item in buckets), ZERO),
+        "outflows": sum((item.external_out for item in buckets), ZERO),
+        "income": sum((item.income for item in buckets), ZERO),
+        "fees": sum((item.fees for item in buckets), ZERO),
+        "taxes": sum((item.taxes for item in buckets), ZERO),
     }
 
 
