@@ -602,7 +602,6 @@ function renderNavChart(snapshots, currency) {
 }
 
 function renderPerformance(performance, history, currency) {
-  const reliable = performance.coverage.is_reliable;
   setMoneyValue(elements.perfEnding, performance.ending_value, currency);
   elements.perfRange.textContent = `${performance.start_date} 至 ${performance.end_date}`;
 
@@ -620,9 +619,8 @@ function renderPerformance(performance, history, currency) {
   elements.perfFlowsDetail.textContent = `流入 ${formatMoney(performance.external_inflows, currency)} · 流出 ${formatMoney(performance.external_outflows, currency)}`;
 
   const messages = [...performance.coverage.warnings];
-  if (reliable && !messages.length) messages.push("此期間資料完整：無缺漏快照、無部分估值，且每筆事件的現金流都可分類。");
   renderMessages(elements.perfCoverage, messages);
-  elements.perfCoverage.hidden = false;
+  elements.perfCoverage.hidden = !messages.length;
 
   clear(elements.perfMethod);
   const entries = [
