@@ -70,6 +70,18 @@ button:disabled, select:disabled { cursor: not-allowed; opacity: .55; }
 .status__message--error { color: #852e27; background: var(--negative-soft); }
 .status__action { margin-left: auto; border: 0; color: inherit; background: transparent; text-decoration: underline; cursor: pointer; }
 
+.range-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 16px; }
+.range-picker__option { min-height: 34px; padding: 0 14px; border: 1px solid #bcc9ce; border-radius: 999px; color: var(--muted); background: #fff; font-weight: 700; font-size: .82rem; cursor: pointer; }
+.range-picker__option:hover { color: var(--ink); }
+.range-picker__option.range-picker__option--active { border-color: var(--teal); color: var(--teal); background: var(--teal-soft); }
+.range-picker__custom { display: flex; align-items: center; gap: 6px; }
+.range-picker__custom input[type="date"] { min-height: 34px; padding: 0 10px; border: 1px solid #bcc9ce; border-radius: 8px; color: var(--ink); background: #fff; font-size: .82rem; }
+.button--small { min-height: 34px; padding: 0 12px; border-radius: 999px; font-size: .82rem; }
+.button--ghost { color: var(--ink); background: transparent; }
+.button--ghost:hover:not(:disabled) { background: #eef1f2; }
+.button--link { min-height: auto; padding: 0; border: 0; color: var(--teal); background: transparent; font-weight: 700; font-size: .82rem; cursor: pointer; }
+.button--link:hover { text-decoration: underline; }
+
 .summary-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 14px; margin-bottom: 24px; }
 .metric, .panel { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); }
 .metric { min-width: 0; min-height: 144px; padding: 20px; }
@@ -201,3 +213,19 @@ td.number, th.number { text-align: right; font-variant-numeric: tabular-nums; }
   .tab { padding: 10px 13px; font-size: .86rem; }
   .summary-grid--four { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* Issuer mapping dialog --------------------------------------------------- */
+.issuer-dialog { width: min(440px, calc(100% - 40px)); padding: 0; border: 0; border-radius: 14px; box-shadow: var(--shadow); }
+.issuer-dialog::backdrop { background: rgb(23 33 43 / 45%); }
+.issuer-dialog form { display: grid; gap: 14px; padding: 26px; }
+.issuer-dialog h2 { font-size: 1.05rem; }
+.issuer-dialog #issuer-dialog-ticker { margin-top: -8px; font-weight: 700; color: var(--ink); }
+.field { display: grid; gap: 6px; }
+.field label { color: var(--muted); font-size: .8rem; font-weight: 700; }
+.field input {
+  min-height: 40px; padding: 0 12px; border: 1px solid #bcc9ce; border-radius: 8px;
+  color: var(--ink); background: #fff; font: inherit;
+}
+.field input:focus-visible { outline: 3px solid #86d6cf; outline-offset: 1px; }
+.issuer-dialog__error { padding: 10px 12px; border: 1px solid #f0b4ac; border-radius: 8px; color: #852e27; background: var(--negative-soft); font-size: .84rem; }
+.issuer-dialog__actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }

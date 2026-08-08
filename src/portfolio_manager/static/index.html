@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="description" content="本機持倉總覽">
     <title>持倉總覽</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23183b4e'/%3E%3Ctext x='16' y='23' font-family='Arial, sans-serif' font-size='18' font-weight='900' fill='%235bc0b5' text-anchor='middle'%3EP%3C/text%3E%3C/svg%3E">
     <link rel="stylesheet" href="static/dashboard.css">
     <script src="static/dashboard.js" defer></script>
   </head>
@@ -125,6 +126,19 @@
       </section>
 
       <section id="performance" class="dashboard" data-panel="performance" hidden>
+        <div class="range-picker" role="group" aria-label="績效區間">
+          <button class="range-picker__option" type="button" data-range="all">全部</button>
+          <button class="range-picker__option" type="button" data-range="ytd">今年迄今</button>
+          <button class="range-picker__option" type="button" data-range="1y">近一年</button>
+          <button class="range-picker__option" type="button" data-range="custom">自訂</button>
+          <span id="range-custom-inputs" class="range-picker__custom" hidden>
+            <input id="range-start" type="date" aria-label="起始日期">
+            <span aria-hidden="true">–</span>
+            <input id="range-end" type="date" aria-label="結束日期">
+            <button id="range-apply" class="button button--small" type="button">套用</button>
+          </span>
+        </div>
+
         <section class="summary-grid summary-grid--four" aria-label="績效摘要">
           <article class="metric metric--primary">
             <p>期末淨值</p>
@@ -219,6 +233,7 @@
                   <th scope="col">證券類型</th>
                   <th scope="col">發行人</th>
                   <th scope="col">來源</th>
+                  <th scope="col"></th>
                 </tr>
               </thead>
               <tbody id="class-body"></tbody>
@@ -338,5 +353,34 @@
         </div>
       </section>
     </main>
+
+    <dialog id="issuer-dialog" class="issuer-dialog">
+      <form id="issuer-form" method="dialog">
+        <h2>對應發行人</h2>
+        <p id="issuer-dialog-ticker" class="muted"></p>
+        <p class="panel__note">
+          將此標的連結到發行公司，讓不同市場的上市（例如 TSM 與 2330.TW）能合併計算發行人曝險。
+          標的仍各自保留自己的價格與幣別，只有發行人連結是共用的。
+        </p>
+        <div class="field">
+          <label for="issuer-legal-name">法定名稱 <span aria-hidden="true">*</span></label>
+          <input id="issuer-legal-name" type="text" required maxlength="200"
+                 placeholder="Taiwan Semiconductor Manufacturing Company Limited">
+        </div>
+        <div class="field">
+          <label for="issuer-display-name">顯示名稱</label>
+          <input id="issuer-display-name" type="text" placeholder="TSMC">
+        </div>
+        <div class="field">
+          <label for="issuer-country">註冊地（兩碼代碼）</label>
+          <input id="issuer-country" type="text" maxlength="2" placeholder="TW">
+        </div>
+        <div id="issuer-dialog-error" class="issuer-dialog__error" hidden></div>
+        <div class="issuer-dialog__actions">
+          <button id="issuer-cancel" type="button" class="button button--ghost">取消</button>
+          <button id="issuer-submit" type="submit" class="button">儲存對應</button>
+        </div>
+      </form>
+    </dialog>
   </body>
 </html>

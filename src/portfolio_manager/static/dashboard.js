@@ -7,12 +7,13 @@ const state = {
   // and a tab nobody opens costs nothing.
   loaded: {},
   groupId: null,
+  // "all" | "ytd" | "1y" | "custom". Defaults to the portfolio's full history rather than a
+  // fixed lookback, since a 30-day default made an inception-to-date question unanswerable
+  // without hand-editing query params.
+  perfRangeMode: "all",
+  perfCustomStart: null,
+  perfCustomEnd: null,
 };
-
-// The widest window the performance tab will look back over. The window actually used starts
-// at the first stored snapshot, because a fixed 30-day window on a portfolio with two weeks of
-// history would report a fortnight of "missing" dates that no work could ever fill.
-const HISTORY_DAYS = 30;
 
 const COLORS = ["#12746e", "#e1904b", "#4d72b8", "#9b6cb4", "#579c70", "#c06672", "#697886"];
 const elements = {
@@ -41,6 +42,11 @@ const elements = {
   tabs: document.querySelectorAll(".tab"),
   panels: document.querySelectorAll("[data-panel]"),
   // Performance
+  rangeOptions: document.querySelectorAll(".range-picker__option"),
+  rangeCustomInputs: document.querySelector("#range-custom-inputs"),
+  rangeStart: document.querySelector("#range-start"),
+  rangeEnd: document.querySelector("#range-end"),
+  rangeApply: document.querySelector("#range-apply"),
   perfEnding: document.querySelector("#perf-ending"),
   perfRange: document.querySelector("#perf-range"),
   perfTwr: document.querySelector("#perf-twr"),
@@ -62,6 +68,15 @@ const elements = {
   qCoverageDetail: document.querySelector("#q-coverage-detail"),
   qualityWarnings: document.querySelector("#quality-warnings"),
   classBody: document.querySelector("#class-body"),
+  issuerDialog: document.querySelector("#issuer-dialog"),
+  issuerForm: document.querySelector("#issuer-form"),
+  issuerDialogTicker: document.querySelector("#issuer-dialog-ticker"),
+  issuerLegalName: document.querySelector("#issuer-legal-name"),
+  issuerDisplayName: document.querySelector("#issuer-display-name"),
+  issuerCountry: document.querySelector("#issuer-country"),
+  issuerDialogError: document.querySelector("#issuer-dialog-error"),
+  issuerCancel: document.querySelector("#issuer-cancel"),
+  issuerSubmit: document.querySelector("#issuer-submit"),
   journalBody: document.querySelector("#journal-body"),
   journalCount: document.querySelector("#journal-count"),
   // Consolidation
@@ -101,6 +116,28 @@ async function fetchJson(url) {
     // Keep the generic error when the response is not a JSON API error.
   }
   throw new ApiError(message);
+}
+
+async function putJson(url, body) {
+  const response = await fetch(url, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (response.ok) return response.json();
+
+  let message = "無法儲存變更，請稍後再試。";
+  try {
+    const error = await response.json();
+    if (error.code && error.message) message = `${error.code}：${error.message}`;
+  } catch {
+    // Keep the generic error when the response is not a JSON API error.
+  }
+  throw new ApiError(message);
+}
+
+function newRequestId() {
+  return crypto.randomUUID();
 }
 
 function clear(node) {
@@ -406,6 +443,35 @@ function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function startOfYear() {
+  return `${new Date().getUTCFullYear()}-01-01`;
+}
+
+// "all" probes from a fixed, far-back anchor rather than the portfolio row's created_at --
+// that timestamp is when the row was inserted into this app, not when the investor's history
+// actually began, and backdated first transactions are the common case. resolveHistoryRange()
+// narrows the probe down to the real first/last snapshot, so an overly wide anchor costs one
+// query, not a truncated "all".
+const EPOCH_START = "2000-01-01";
+
+function perfWindowStart() {
+  switch (state.perfRangeMode) {
+    case "ytd":
+      return startOfYear();
+    case "1y":
+      return isoDaysAgo(365);
+    case "custom":
+      return state.perfCustomStart || startOfYear();
+    case "all":
+    default:
+      return EPOCH_START;
+  }
+}
+
+function perfWindowEnd() {
+  return state.perfRangeMode === "custom" && state.perfCustomEnd ? state.perfCustomEnd : today();
+}
+
 // The API speaks English; this dashboard speaks Chinese. Patterns are matched loosely so a
 // reworded warning still translates, and anything unrecognised is shown verbatim rather than
 // swallowed -- a hidden warning is worse than an untranslated one.
@@ -577,9 +643,10 @@ function renderPerformance(performance, history, currency) {
 }
 
 // Narrow the window to the snapshots that exist, so a reported gap is a real gap rather than
-// an artifact of asking for dates before the portfolio had any history.
+// an artifact of asking for dates before the portfolio had any history. The wide probe itself
+// spans the selected range (all history by default), never a fixed lookback.
 async function resolveHistoryRange(id) {
-  const wide = `start_date=${isoDaysAgo(HISTORY_DAYS)}&end_date=${today()}`;
+  const wide = `start_date=${perfWindowStart()}&end_date=${perfWindowEnd()}`;
   const probe = await fetchJson(`api/v1/portfolios/${id}/nav-history?${wide}`);
   if (!probe.snapshots.length) return { range: wide, history: probe };
   const start = probe.snapshots[0].valuation_date;
@@ -588,7 +655,15 @@ async function resolveHistoryRange(id) {
   return { range, history: await fetchJson(`api/v1/portfolios/${id}/nav-history?${range}`) };
 }
 
+function updateRangePickerUI() {
+  elements.rangeOptions.forEach((button) => {
+    button.classList.toggle("range-picker__option--active", button.dataset.range === state.perfRangeMode);
+  });
+  elements.rangeCustomInputs.hidden = state.perfRangeMode !== "custom";
+}
+
 async function loadPerformance() {
+  updateRangePickerUI();
   const portfolio = state.portfolios.find((item) => item.id === state.selectedId);
   const currency = portfolio?.base_currency ?? "";
   const id = encodeURIComponent(state.selectedId);
@@ -638,10 +713,67 @@ function renderClassifications(profiles) {
     row.append(createCell(profile.classification?.security_type?.value ?? "—"));
     row.append(createCell(profile.issuer?.display_name || profile.issuer?.legal_name || "—"));
     row.append(createCell(provenanceBadge(assetClass?.provenance)));
+
+    const editButton = element("button", "button--link", profile.issuer ? "變更" : "對應發行人");
+    editButton.type = "button";
+    editButton.addEventListener("click", () => openIssuerDialog(profile));
+    row.append(createCell(editButton));
+
     elements.classBody.append(row);
   });
   elements.qClassified.textContent = `${classified} / ${profiles.length}`;
 }
+
+let issuerDialogReference = null;
+
+function openIssuerDialog(profile) {
+  issuerDialogReference = profile.instrument_id;
+  elements.issuerDialogTicker.textContent = profile.name
+    ? `${profile.ticker} · ${profile.name}`
+    : profile.ticker;
+  elements.issuerLegalName.value = profile.issuer?.legal_name ?? "";
+  elements.issuerDisplayName.value = profile.issuer?.display_name ?? "";
+  elements.issuerCountry.value = profile.issuer?.country_of_domicile ?? "";
+  elements.issuerDialogError.hidden = true;
+  elements.issuerDialogError.textContent = "";
+  elements.issuerSubmit.disabled = false;
+  elements.issuerSubmit.textContent = "儲存對應";
+  elements.issuerDialog.showModal();
+  elements.issuerLegalName.focus();
+}
+
+async function submitIssuerMapping() {
+  const legalName = elements.issuerLegalName.value.trim();
+  if (!legalName) return;
+
+  elements.issuerSubmit.disabled = true;
+  elements.issuerSubmit.textContent = "儲存中…";
+  elements.issuerDialogError.hidden = true;
+
+  try {
+    await putJson(`api/v1/instruments/${encodeURIComponent(issuerDialogReference)}/issuer`, {
+      request_id: newRequestId(),
+      legal_name: legalName,
+      display_name: elements.issuerDisplayName.value.trim() || null,
+      country_of_domicile: elements.issuerCountry.value.trim().toUpperCase() || null,
+    });
+    elements.issuerDialog.close();
+    delete state.loaded[`quality:${state.selectedId}`];
+    await loadQuality();
+  } catch (error) {
+    elements.issuerDialogError.textContent =
+      error instanceof ApiError ? error.message : "無法儲存變更，請稍後再試。";
+    elements.issuerDialogError.hidden = false;
+    elements.issuerSubmit.disabled = false;
+    elements.issuerSubmit.textContent = "儲存對應";
+  }
+}
+
+elements.issuerForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  submitIssuerMapping();
+});
+elements.issuerCancel.addEventListener("click", () => elements.issuerDialog.close());
 
 // A badge that asks for action must be reserved for events where action is possible. Every event
 // now enters through the journal, so the only open question left is a flow nobody can classify.
@@ -792,4 +924,37 @@ elements.select.addEventListener("change", () => {
   if (state.tab !== "overview") loadTab(state.tab);
 });
 elements.refresh.addEventListener("click", loadSummary);
+
+// Changing the range invalidates the performance/quality cache for this portfolio, since both
+// read whatever window resolveHistoryRange() resolves against state.perfRangeMode.
+function reloadRangedTabs() {
+  delete state.loaded[`performance:${state.selectedId}`];
+  delete state.loaded[`quality:${state.selectedId}`];
+  if (state.tab === "performance" || state.tab === "quality") loadTab(state.tab);
+  else updateRangePickerUI();
+}
+
+elements.rangeOptions.forEach((button) => {
+  button.addEventListener("click", () => {
+    state.perfRangeMode = button.dataset.range;
+    if (state.perfRangeMode === "custom" && !state.perfCustomStart) {
+      state.perfCustomStart = startOfYear();
+      state.perfCustomEnd = today();
+      elements.rangeStart.value = state.perfCustomStart;
+      elements.rangeEnd.value = state.perfCustomEnd;
+      updateRangePickerUI();
+      return;
+    }
+    reloadRangedTabs();
+  });
+});
+
+elements.rangeApply.addEventListener("click", () => {
+  if (!elements.rangeStart.value || !elements.rangeEnd.value) return;
+  state.perfRangeMode = "custom";
+  state.perfCustomStart = elements.rangeStart.value;
+  state.perfCustomEnd = elements.rangeEnd.value;
+  reloadRangedTabs();
+});
+
 loadDashboard();
