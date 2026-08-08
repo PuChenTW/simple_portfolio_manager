@@ -20,6 +20,12 @@ per event. Every addition is optional and defaults to the previous behavior, so 
 change -- but the assertions below compare parameter sets and schemas for equality, not
 containment, and a purely additive change still has to be declared. That strictness is the point:
 it forces the addition to be a decision rather than a diff nobody noticed.
+
+0.4.0 added `clear_market_cache` -- one operation, one model, one MCP tool -- alongside the Redis
+price-history cache. Nothing existing moved, so only the version line of the baseline changed.
+The tool exists because cached bars are auto-adjusted and a provider silently restates them after
+a split or dividend: rather than expire entries on a guess about when that happened, recording
+such an action warns the operator and this drops the affected symbol on request.
 """
 
 import asyncio

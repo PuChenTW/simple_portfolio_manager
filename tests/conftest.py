@@ -35,6 +35,7 @@ class FakeMarketProvider:
         self.fail = False
         self.history_limit: int | None = None
         self.calls: list[str] = []
+        self.history_calls: list[str] = []
         self.prices = {
             "AAPL": Decimal("140"),
             "MSFT": Decimal("500"),
@@ -121,6 +122,9 @@ class FakeMarketProvider:
         interval: HistoryInterval = HistoryInterval.DAILY,
         adjustment: HistoryAdjustment = HistoryAdjustment.AUTO,
     ) -> HistoryResult:
+        # Recorded separately from `calls`, which only tracks `fetch`. A cache in front of this
+        # provider is only proven by the requests that never arrive.
+        self.history_calls.append(ticker)
         if self.fail or ticker not in self.prices:
             raise MarketDataError(f"No fixture for {ticker}")
         price = self.prices[ticker]
@@ -166,6 +170,12 @@ class Harness:
         )
         assert response.status_code == 201, response.text
         return response.json()["id"]
+
+
+@pytest.fixture
+def market_provider() -> FakeMarketProvider:
+    """The fake provider on its own, for tests that need no database or HTTP client."""
+    return FakeMarketProvider()
 
 
 @pytest.fixture

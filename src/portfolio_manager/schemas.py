@@ -108,6 +108,22 @@ class TagsRead(ApiModel):
     tags: list[str]
 
 
+class CacheClearRead(ApiModel):
+    """What a cache-clear actually removed, including when there was no cache to clear."""
+
+    ticker: str
+    cleared_keys: int = Field(
+        description="Number of cached entries removed. Zero means nothing was cached."
+    )
+    cache_enabled: bool = Field(
+        description=(
+            "False when no cache is configured. The call then did nothing, rather than "
+            "silently reporting success for a cache that does not exist."
+        )
+    )
+    warnings: list[str] = []
+
+
 class QuoteRead(ApiModel):
     """Current quote plus explicit data provenance and freshness."""
 

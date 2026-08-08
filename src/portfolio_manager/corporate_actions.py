@@ -13,6 +13,7 @@ Two rules govern this module:
 """
 
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
@@ -46,10 +47,23 @@ class FractionalHandling(StrEnum):
     ROUND_DOWN = "round_down"
 
 
+logger = logging.getLogger(__name__)
+
 # Actions whose correct cost-basis treatment depends on jurisdiction or issuer disclosure that
 # this service does not have. They are recorded and reported, never silently allocated.
 _UNRESOLVED_BASIS_ACTIONS = frozenset(
     {ActionType.SPINOFF, ActionType.MERGER, ActionType.STOCK_DIVIDEND}
+)
+
+# Actions after which a provider retroactively restates its auto-adjusted price history. Cached
+# bars for the instrument are stale from the ex-date onward, and no rule here can tell when.
+_PRICE_RESTATING_ACTIONS = frozenset(
+    {
+        ActionType.SPLIT,
+        ActionType.REVERSE_SPLIT,
+        ActionType.STOCK_DIVIDEND,
+        ActionType.CASH_DIVIDEND,
+    }
 )
 
 _ACTION_EVENT_TYPES = {
@@ -153,6 +167,17 @@ def record_corporate_action(
     )
     session.add(action)
     session.commit()
+
+    if action_type in _PRICE_RESTATING_ACTIONS:
+        # Auto-adjusted history is restated by the provider once this takes effect, and a cache
+        # cannot tell that happened. Say so plainly instead of expiring entries on a guess.
+        logger.warning(
+            "%s recorded for %s (ex-date %s); cached price history is now suspect. "
+            "Call clear_market_cache for this ticker.",
+            action_type.value,
+            instrument.ticker,
+            _aware(ex_date).date().isoformat(),
+        )
     return action
 
 

@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from .cache import CachingMarketProvider, build_provider
 from .config import settings
 from .consolidation import (
     build_consolidated_summary,
@@ -53,6 +54,7 @@ from .postings import (
 )
 from .schemas import (
     BalanceRead,
+    CacheClearRead,
     ClassificationOverrideUpdate,
     ConsolidatedPositionRead,
     ConsolidatedSummaryRead,
@@ -313,7 +315,7 @@ class StripPrefixMiddleware:
 
 app = FastAPI(
     title="Local Portfolio Manager",
-    version="0.3.0",
+    version="0.4.0",
     summary="Agent-friendly accounting for cash, stocks, and crypto portfolios",
     description=API_DESCRIPTION,
     openapi_tags=OPENAPI_TAGS,
@@ -355,7 +357,7 @@ def dashboard() -> HTMLResponse:
     return HTMLResponse(_DASHBOARD_HTML)
 
 
-_market_provider = YahooMarketProvider()
+_market_provider = build_provider(YahooMarketProvider())
 
 
 def get_market_provider() -> MarketProvider:
@@ -798,6 +800,38 @@ def read_technical_snapshot(
 
 
 @app.post(
+    "/api/v1/market/instruments/{ticker}/cache-clear",
+    response_model=CacheClearRead,
+    operation_id="clear_market_cache",
+    summary="Drop cached price history for one instrument",
+    response_description="How many cached entries were removed",
+    tags=["market"],
+)
+def clear_market_cache(ticker: TickerPath, provider: ProviderDep) -> CacheClearRead:
+    """
+    Force the next price lookup for this ticker to go back to the provider.
+
+    Cached daily bars are auto-adjusted, and a provider restates them after a split or dividend.
+    The cache cannot detect that restatement, so recording a corporate action warns you to call
+    this instead of guessing when a cached bar went out of date. Clearing is always safe: the
+    cache holds nothing that cannot be fetched again.
+
+    `cache_enabled` is false when no cache is configured, meaning the call did nothing.
+    """
+    symbol = ticker.strip().upper()
+    if not isinstance(provider, CachingMarketProvider):
+        return CacheClearRead(
+            ticker=symbol,
+            cleared_keys=0,
+            cache_enabled=False,
+            warnings=["No market cache is configured, so there was nothing to clear"],
+        )
+    return CacheClearRead(
+        ticker=symbol, cleared_keys=provider.clear_ticker(symbol), cache_enabled=True
+    )
+
+
+@app.post(
     "/api/v1/portfolios/{portfolio_id}/transactions",
     response_model=JournalEventDetail,
     status_code=status.HTTP_201_CREATED,
@@ -1029,6 +1063,10 @@ def post_corporate_action(
     while applying it changes a specific portfolio. Supply `cost_allocation_percent` only when the
     issuer disclosed it -- leaving it null marks the action cost-basis unresolved, which is
     reported honestly rather than filled with a guess that would corrupt later gain calculations.
+
+    After recording a split or dividend, call `clear_market_cache` for the ticker. Cached daily
+    bars are auto-adjusted, and the provider restates them once the action takes effect; the
+    cache cannot detect that restatement, so it is dropped on request rather than on a guess.
     """
     _resolve_or_fetch(session, market, data.ticker)
     if data.new_ticker:

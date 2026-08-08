@@ -1,4 +1,28 @@
 services:
+  # Cache only: everything here can be refetched from the market provider, so persistence is
+  # switched off and the container is disposable. No port is published -- it is reachable only
+  # from the compose network, keeping the loopback-only rule intact.
+  redis:
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 256mb
+      # Cached bars are recoverable, so evicting the least recently used beats refusing writes.
+      - --maxmemory-policy
+      - allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    restart: unless-stopped
+
   portfolio-manager:
     build:
       context: .
@@ -12,8 +36,14 @@ services:
       PORTFOLIO_DB_PATH: /data/portfolio.db
       PORTFOLIO_QUOTE_TTL_SECONDS: "${PORTFOLIO_QUOTE_TTL_SECONDS:-300}"
       PORTFOLIO_URL_PREFIX: /portfolio
+      PORTFOLIO_REDIS_URL: redis://redis:6379/0
+      PORTFOLIO_HISTORY_CACHE_TTL_SECONDS: "${PORTFOLIO_HISTORY_CACHE_TTL_SECONDS:-2592000}"
+      PORTFOLIO_HISTORY_RECENT_TTL_SECONDS: "${PORTFOLIO_HISTORY_RECENT_TTL_SECONDS:-600}"
     volumes:
       - portfolio-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test:
         [

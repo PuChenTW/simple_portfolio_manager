@@ -43,6 +43,21 @@ valuation, or an event whose cash flow cannot be classified each makes a return 
 observation so a conversion can be audited; `consolidation.py` groups portfolios and expresses
 their holdings in one reporting currency, keeping each local figure beside its converted one.
 
+`cache.py` sits under all of that as a Redis layer wrapping the `MarketProvider` protocol, so no
+consumer knows it exists. Daily bars are stored one calendar month per key: callers ask for
+ranges that start and end mid-month, and a bucket holding only the requested slice would leave a
+gap the cache itself invented, so a fetch widens to the month boundary and only whole months are
+stored. The month containing today expires in minutes because its last bar is still moving;
+earlier months last far longer because a closed session's OHLC is a fact. Every Redis failure
+degrades to the provider -- a cache that can break a request is worse than no cache -- and
+`PORTFOLIO_REDIS_URL` left unset disables the layer entirely.
+
+That "fact" has one exception, and it is the reason `clear_market_cache` exists. Auto-adjusted
+bars are restated by the provider after a split or dividend, which no rule here can detect.
+Recording such an action logs a warning naming the ticker rather than expiring entries on a
+guess about when the restatement happened; clearing is always safe, since the cache holds
+nothing that cannot be fetched again.
+
 ## Build, Test, and Development Commands
 
 - `uv sync`: create the Python 3.13 environment from `uv.lock`.
@@ -82,7 +97,9 @@ explicit version bump, never a quietly regenerated baseline. Version 0.2.0 was s
 removed the pre-journal `record_trade` and `record_cash_transaction` ledgers, whose position and
 cash writes were independent and could disagree. `record_transaction` is now the only write path.
 0.3.0 was the additive kind: `include_legs` on `list_journal_events` returns each event's legs
-inline, so reading a day of activity costs one request rather than one per event. `test_migrations.py` additionally asserts that
+inline, so reading a day of activity costs one request rather than one per event. 0.4.0 was too:
+`clear_market_cache` drops cached price history for one ticker, needed because the Redis layer in
+`cache.py` cannot tell when a provider restates its auto-adjusted bars. `test_migrations.py` additionally asserts that
 the migrated schema matches the ORM models, since the test harness builds tables from the ORM
 while production runs Alembic. `test_mcp_server.py` asserts every API operation has a matching
 MCP tool, so adding an endpoint without its tool fails the suite rather than shipping a surface

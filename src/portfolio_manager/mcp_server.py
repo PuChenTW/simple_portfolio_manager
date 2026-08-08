@@ -276,6 +276,18 @@ async def get_technical_snapshot(
     )
 
 
+@mcp.tool()
+async def clear_market_cache(ticker: str) -> dict[str, Any]:
+    """Drop cached price history for a ticker so the next lookup refetches it.
+
+    Call after recording a split or dividend: cached daily bars are auto-adjusted, and the
+    provider restates them once the action takes effect, which the cache cannot detect. Clearing
+    is always safe -- nothing is held that cannot be fetched again. `cache_enabled` false means
+    no cache is configured and the call did nothing.
+    """
+    return await _request("POST", f"/api/v1/market/instruments/{ticker}/cache-clear")
+
+
 # --- Journal ----------------------------------------------------------------
 
 

@@ -9,13 +9,14 @@ import json
 import sys
 from datetime import date
 
+from .cache import build_provider
 from .db import SessionLocal
 from .market import YahooMarketProvider
 from .valuation import rebuild_snapshots
 
 
 def _rebuild(args: argparse.Namespace) -> int:
-    provider = YahooMarketProvider()
+    provider = build_provider(YahooMarketProvider())
     with SessionLocal() as session:
         report = rebuild_snapshots(
             session,
