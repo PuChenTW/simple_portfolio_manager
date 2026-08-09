@@ -9,3 +9,5 @@ __pycache__/
 .coverage
 .playwright-mcp/
 CLAUDE.local.md
+.temp
+.DS_Store

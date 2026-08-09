@@ -28,6 +28,15 @@ const elements = {
   dashboard: document.querySelector("#dashboard"),
   select: document.querySelector("#portfolio-select"),
   refresh: document.querySelector("#refresh-button"),
+  deleteButton: document.querySelector("#delete-button"),
+  deleteDialog: document.querySelector("#delete-dialog"),
+  deleteForm: document.querySelector("#delete-form"),
+  deleteDialogTarget: document.querySelector("#delete-dialog-target"),
+  deleteDialogScale: document.querySelector("#delete-dialog-scale"),
+  deleteConfirmName: document.querySelector("#delete-confirm-name"),
+  deleteDialogError: document.querySelector("#delete-dialog-error"),
+  deleteCancel: document.querySelector("#delete-cancel"),
+  deleteSubmit: document.querySelector("#delete-submit"),
   status: document.querySelector("#status"),
   valuationTime: document.querySelector("#valuation-time"),
   totalValue: document.querySelector("#total-value"),
@@ -147,6 +156,24 @@ async function putJson(url, body) {
   throw new ApiError(message);
 }
 
+async function deleteResource(url) {
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: { Accept: "application/json" },
+  });
+  // A successful delete replies 204 with no body, so nothing is parsed here.
+  if (response.ok) return;
+
+  let message = "無法刪除，請稍後再試。";
+  try {
+    const error = await response.json();
+    if (error.code && error.message) message = `${error.code}：${error.message}`;
+  } catch {
+    // Keep the generic error when the response is not a JSON API error.
+  }
+  throw new ApiError(message);
+}
+
 function newRequestId() {
   return crypto.randomUUID();
 }
@@ -211,6 +238,7 @@ function setPnlValue(node, value, currency) {
 function setBusy(busy, message) {
   elements.select.disabled = busy || state.portfolios.length === 0;
   elements.refresh.disabled = busy || !state.selectedId;
+  elements.deleteButton.disabled = busy || !state.selectedId;
   if (message) showStatus(message);
 }
 
@@ -783,6 +811,86 @@ elements.issuerForm.addEventListener("submit", (event) => {
   submitIssuerMapping();
 });
 elements.issuerCancel.addEventListener("click", () => elements.issuerDialog.close());
+
+/* Delete a portfolio ------------------------------------------------------- */
+
+// Deleting is irreversible and takes the whole journal with it, so the confirmation
+// asks for the portfolio's name rather than a bare OK. A misclick cannot satisfy it.
+let deleteTarget = null;
+
+function openDeleteDialog() {
+  deleteTarget = state.portfolios.find((portfolio) => portfolio.id === state.selectedId);
+  if (!deleteTarget) return;
+
+  const target = deleteTarget;
+  elements.deleteDialogTarget.textContent = `${target.name}（${target.base_currency}）`;
+  elements.deleteDialogScale.textContent = "";
+  elements.deleteConfirmName.value = "";
+  elements.deleteDialogError.hidden = true;
+  elements.deleteDialogError.textContent = "";
+  elements.deleteSubmit.disabled = true;
+  elements.deleteSubmit.textContent = "永久刪除";
+  elements.deleteDialog.showModal();
+  elements.deleteConfirmName.focus();
+
+  // State the size of what is being destroyed, fetched fresh so the dialog never
+  // quotes a stale figure. It is context only: failing to load it must not block
+  // the deletion, and a slow reply must not land in a dialog since reopened.
+  fetchJson(`api/v1/portfolios/${encodeURIComponent(target.id)}/summary`)
+    .then((summary) => {
+      if (deleteTarget !== target) return;
+      const count = summary.positions?.length ?? 0;
+      elements.deleteDialogScale.textContent =
+        `目前持有 ${count} 檔標的，總值 ${formatMoney(summary.total_value, target.base_currency)}。`;
+    })
+    .catch(() => {});
+}
+
+function syncDeleteSubmitState() {
+  elements.deleteSubmit.disabled =
+    !deleteTarget || elements.deleteConfirmName.value.trim() !== deleteTarget.name;
+}
+
+async function submitDelete() {
+  if (!deleteTarget || elements.deleteConfirmName.value.trim() !== deleteTarget.name) return;
+
+  const removed = deleteTarget;
+  elements.deleteSubmit.disabled = true;
+  elements.deleteSubmit.textContent = "刪除中…";
+  elements.deleteDialogError.hidden = true;
+
+  try {
+    await deleteResource(`api/v1/portfolios/${encodeURIComponent(removed.id)}`);
+    // Closing clears deleteTarget via the dialog's close handler.
+    elements.deleteDialog.close();
+    // Nothing cached belongs to a portfolio that no longer exists.
+    state.loaded = {};
+    state.selectedId = null;
+    state.journalOffset = 0;
+    state.journalExpanded.clear();
+    await loadDashboard();
+    showStatus(`已刪除「${removed.name}」。`, false);
+  } catch (error) {
+    elements.deleteDialogError.textContent =
+      error instanceof ApiError ? error.message : "無法刪除，請稍後再試。";
+    elements.deleteDialogError.hidden = false;
+    elements.deleteSubmit.textContent = "永久刪除";
+    syncDeleteSubmitState();
+  }
+}
+
+elements.deleteButton.addEventListener("click", openDeleteDialog);
+elements.deleteConfirmName.addEventListener("input", syncDeleteSubmitState);
+elements.deleteForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  submitDelete();
+});
+elements.deleteCancel.addEventListener("click", () => elements.deleteDialog.close());
+// Covers Esc and the cancel button alike, so a late summary reply cannot write into
+// a dialog that has been dismissed or reopened for a different portfolio.
+elements.deleteDialog.addEventListener("close", () => {
+  deleteTarget = null;
+});
 
 // A badge that asks for action must be reserved for events where action is possible. Every event
 // now enters through the journal, so the only open question left is a flow nobody can classify.

@@ -77,6 +77,8 @@ button:disabled, select:disabled { cursor: not-allowed; opacity: .55; }
 .range-picker__custom { display: flex; align-items: center; gap: 6px; }
 .range-picker__custom input[type="date"] { min-height: 34px; padding: 0 10px; border: 1px solid #bcc9ce; border-radius: 8px; color: var(--ink); background: #fff; font-size: .82rem; }
 .button--small { min-height: 34px; padding: 0 12px; border-radius: 999px; font-size: .82rem; }
+.button--danger { border-color: var(--negative); background: var(--negative); }
+.button--danger:hover:not(:disabled) { background: #6f251f; border-color: #6f251f; }
 .button--ghost { color: var(--ink); background: transparent; }
 .button--ghost:hover:not(:disabled) { background: #eef1f2; }
 .button--link { min-height: auto; padding: 0; border: 0; color: var(--teal); background: transparent; font-weight: 700; font-size: .82rem; cursor: pointer; }
@@ -237,7 +239,9 @@ td.number, th.number { text-align: right; font-variant-numeric: tabular-nums; }
 .issuer-dialog::backdrop { background: rgb(23 33 43 / 45%); }
 .issuer-dialog form { display: grid; gap: 14px; padding: 26px; }
 .issuer-dialog h2 { font-size: 1.05rem; }
-.issuer-dialog #issuer-dialog-ticker { margin-top: -8px; font-weight: 700; color: var(--ink); }
+.issuer-dialog #issuer-dialog-ticker,
+.issuer-dialog #delete-dialog-target { margin-top: -8px; font-weight: 700; color: var(--ink); }
+.issuer-dialog #delete-dialog-scale { color: var(--muted); }
 .field { display: grid; gap: 6px; }
 .field label { color: var(--muted); font-size: .8rem; font-weight: 700; }
 .field input {

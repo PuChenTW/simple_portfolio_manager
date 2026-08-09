@@ -33,6 +33,9 @@
           <button id="refresh-button" class="button" type="button" disabled>
             重新整理
           </button>
+          <button id="delete-button" class="button button--danger" type="button" disabled>
+            刪除
+          </button>
         </div>
       </section>
 
@@ -365,6 +368,30 @@
         </div>
       </section>
     </main>
+
+    <dialog id="delete-dialog" class="issuer-dialog">
+      <form id="delete-form" method="dialog">
+        <h2>刪除投資組合</h2>
+        <p id="delete-dialog-target" class="muted"></p>
+        <p class="panel__note">
+          這會永久刪除此投資組合的所有交易紀錄、持倉、現金餘額與估值快照，
+          包含已過帳的日記帳分錄與已套用的公司行動。此操作無法復原，也沒有備份。
+        </p>
+        <div id="delete-dialog-scale" class="panel__note"></div>
+        <div class="field">
+          <label for="delete-confirm-name">請輸入投資組合名稱以確認 <span aria-hidden="true">*</span></label>
+          <input id="delete-confirm-name" type="text" required autocomplete="off"
+                 spellcheck="false" maxlength="200">
+        </div>
+        <div id="delete-dialog-error" class="issuer-dialog__error" hidden></div>
+        <div class="issuer-dialog__actions">
+          <button id="delete-cancel" type="button" class="button button--ghost">取消</button>
+          <button id="delete-submit" type="submit" class="button button--danger" disabled>
+            永久刪除
+          </button>
+        </div>
+      </form>
+    </dialog>
 
     <dialog id="issuer-dialog" class="issuer-dialog">
       <form id="issuer-form" method="dialog">

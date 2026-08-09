@@ -50,6 +50,76 @@ def test_delete_portfolio_cascades_and_is_idempotent_on_missing_id(harness) -> N
     assert again.json()["code"] == "portfolio_not_found"
 
 
+def test_delete_portfolio_succeeds_with_applied_corporate_actions_and_reversals(
+    harness,
+) -> None:
+    """Two references into journal_events are RESTRICT, so a naive cascade fails.
+
+    A corporate-action application cites the event it posted, and a reversal cites the
+    event it undoes. Both deliberately block deleting that event, which used to make
+    deleting the whole portfolio return 500 once it had either.
+    """
+    portfolio_id = harness.portfolio()
+    harness.client.post(
+        f"/api/v1/portfolios/{portfolio_id}/transactions",
+        json={"request_id": "d", "transaction_type": "deposit", "amount": "20000"},
+    )
+    buy = harness.client.post(
+        f"/api/v1/portfolios/{portfolio_id}/transactions",
+        json={
+            "request_id": "b",
+            "transaction_type": "buy",
+            "ticker": "AAPL",
+            "quantity": "100",
+            "unit_price": "140",
+        },
+    )
+    assert buy.status_code == 201, buy.text
+
+    # Reverse a separate buy, so the reversal reference exists while a live AAPL
+    # position remains for the split to apply to.
+    mistake = harness.client.post(
+        f"/api/v1/portfolios/{portfolio_id}/transactions",
+        json={
+            "request_id": "b2",
+            "transaction_type": "buy",
+            "ticker": "AAPL",
+            "quantity": "10",
+            "unit_price": "140",
+        },
+    )
+    assert mistake.status_code == 201, mistake.text
+    reversal = harness.client.post(
+        f"/api/v1/portfolios/{portfolio_id}"
+        f"/transactions/{mistake.json()['event']['id']}/reversal",
+        json={"request_id": "rev-1"},
+    )
+    assert reversal.status_code == 201, reversal.text
+
+    action = harness.client.post(
+        "/api/v1/corporate-actions",
+        json={
+            "request_id": "ca-del-1",
+            "ticker": "AAPL",
+            "action_type": "split",
+            "ex_date": "2026-06-01T00:00:00Z",
+            "ratio": "2",
+            "source": "issuer announcement",
+        },
+    )
+    assert action.status_code == 201, action.text
+    applied = harness.client.post(
+        f"/api/v1/portfolios/{portfolio_id}"
+        f"/corporate-actions/{action.json()['id']}/apply",
+        json={"request_id": "apply-del-1"},
+    )
+    assert applied.status_code == 201, applied.text
+
+    deleted = harness.client.delete(f"/api/v1/portfolios/{portfolio_id}")
+    assert deleted.status_code == 204, deleted.text
+    assert harness.client.get(f"/api/v1/portfolios/{portfolio_id}").status_code == 404
+
+
 def test_dashboard_and_static_assets_are_available_without_changing_openapi(harness) -> None:
     dashboard = harness.client.get("/")
     assert dashboard.status_code == 200
@@ -57,6 +127,20 @@ def test_dashboard_and_static_assets_are_available_without_changing_openapi(harn
     assert 'id="portfolio-select"' in dashboard.text
     assert 'src="static/dashboard.js"' in dashboard.text
     assert '<base href="/">' in dashboard.text
+    # The delete control and every id its handler queries; a renamed id would
+    # otherwise fail silently in the browser.
+    for node_id in (
+        "delete-button",
+        "delete-dialog",
+        "delete-form",
+        "delete-dialog-target",
+        "delete-dialog-scale",
+        "delete-confirm-name",
+        "delete-dialog-error",
+        "delete-cancel",
+        "delete-submit",
+    ):
+        assert f'id="{node_id}"' in dashboard.text
 
     stylesheet = harness.client.get("/static/dashboard.css")
     script = harness.client.get("/static/dashboard.js")

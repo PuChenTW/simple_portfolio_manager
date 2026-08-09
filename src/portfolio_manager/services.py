@@ -6,7 +6,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -22,7 +22,9 @@ from .market import (
 )
 from .models import (
     CashBalance,
+    CorporateActionApplication,
     Instrument,
+    JournalEvent,
     Portfolio,
     Position,
     PositionTag,
@@ -90,7 +92,34 @@ def create_portfolio(session: Session, data: PortfolioCreate) -> Portfolio:
 
 
 def delete_portfolio(session: Session, portfolio_id: str) -> None:
+    """Delete a portfolio and everything recorded against it.
+
+    Most children cascade from `portfolios.id`, but two references into
+    `journal_events` are deliberately `RESTRICT` so that a posted event can never
+    be deleted out from under the record that cites it: a corporate-action
+    application points at the event it posted, and a reversal points at the event
+    it undoes. A plain cascade therefore trips a foreign-key error the moment the
+    portfolio has either. Clear those references first, in dependency order, so
+    the cascade has nothing left to trip over. Deleting the whole portfolio is the
+    one case where dropping the audit trail is the intent.
+    """
     portfolio = get_portfolio(session, portfolio_id)
+
+    session.execute(
+        delete(CorporateActionApplication).where(
+            CorporateActionApplication.portfolio_id == portfolio_id
+        )
+    )
+    # Legs cascade from their event, but a reversal must go before the event it
+    # undoes. Deleting newest-first satisfies that without walking the chain,
+    # since a reversal is always recorded after its target.
+    for event_id in session.scalars(
+        select(JournalEvent.id)
+        .where(JournalEvent.portfolio_id == portfolio_id)
+        .order_by(JournalEvent.created_at.desc(), JournalEvent.id.desc())
+    ).all():
+        session.execute(delete(JournalEvent).where(JournalEvent.id == event_id))
+
     session.delete(portfolio)
     session.commit()
 
