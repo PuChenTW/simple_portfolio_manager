@@ -289,30 +289,6 @@ AGENT_SKILL_METADATA = {
 }
 
 
-class StripPrefixMiddleware:
-    """Strip a fixed URL prefix from incoming requests before routing.
-
-    Reverse proxies that mount this app on a subpath without rewriting the request (Tailscale
-    Serve's --set-path, notably, forwards the full path unchanged and cannot add forwarding
-    headers) need the app itself to know and remove that prefix. PORTFOLIO_URL_PREFIX supplies
-    it; requests without the prefix (e.g. local, unproxied access) pass through unchanged. This
-    is a pure ASGI middleware, not BaseHTTPMiddleware, because scope mutation must happen before
-    Starlette's router reads scope["path"]. It leaves scope["root_path"] alone: setting it
-    breaks routing inside Mount-ed sub-apps such as the /static StaticFiles mount below, and
-    nothing here relies on root_path for URL generation -- the dashboard's <base> tag is set
-    directly from settings.url_prefix instead.
-    """
-
-    def __init__(self, app, prefix: str) -> None:
-        self.app = app
-        self.prefix = prefix
-
-    async def __call__(self, scope, receive, send) -> None:
-        if scope["type"] == "http" and scope["path"].startswith(self.prefix):
-            scope["path"] = scope["path"][len(self.prefix) :] or "/"
-        await self.app(scope, receive, send)
-
-
 app = FastAPI(
     title="Local Portfolio Manager",
     version="0.4.0",
@@ -322,9 +298,6 @@ app = FastAPI(
     servers=[{"url": "/", "description": "Default local server"}],
     responses=GLOBAL_RESPONSES,
 )
-
-if settings.url_prefix:
-    app.add_middleware(StripPrefixMiddleware, prefix=settings.url_prefix)
 
 STATIC_DIR = FilePath(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -341,18 +314,16 @@ def agent_friendly_openapi():
 app.openapi = agent_friendly_openapi
 
 
-_DASHBOARD_HTML = (STATIC_DIR / "index.html").read_text().replace(
-    "<head>", f'<head>\n    <base href="{settings.url_prefix}/">', 1
-)
+_DASHBOARD_HTML = (STATIC_DIR / "index.html").read_text()
 
 
 @app.get("/", include_in_schema=False)
 def dashboard() -> HTMLResponse:
     """Serve the local, read-only portfolio dashboard.
 
-    The <base> tag is set from PORTFOLIO_URL_PREFIX so relative asset and API paths still
-    resolve correctly when a reverse proxy (e.g. Tailscale Serve) mounts the app on a subpath
-    without stripping that prefix or adding forwarding headers -- see StripPrefixMiddleware below.
+    Served verbatim. The page carries a relative <base href="./">, so its asset and API paths
+    resolve against whatever URL the browser loaded -- the app needs no deployment prefix
+    config, and a proxied request is byte-identical to a direct one anyway.
     """
     return HTMLResponse(_DASHBOARD_HTML)
 

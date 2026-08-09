@@ -126,7 +126,8 @@ def test_dashboard_and_static_assets_are_available_without_changing_openapi(harn
     assert dashboard.headers["content-type"].startswith("text/html")
     assert 'id="portfolio-select"' in dashboard.text
     assert 'src="static/dashboard.js"' in dashboard.text
-    assert '<base href="/">' in dashboard.text
+    # Must stay relative: an absolute base breaks either direct or sub-path access.
+    assert '<base href="./">' in dashboard.text
     # The delete control and every id its handler queries; a renamed id would
     # otherwise fail silently in the browser.
     for node_id in (

@@ -2,6 +2,10 @@
 <html lang="zh-Hant">
   <head>
     <meta charset="utf-8">
+    <!-- Keep this relative. The browser resolves "./" against the document's own URL, so the
+         same file works at http://localhost:8001/ and behind a reverse proxy that mounts the
+         app on a subpath. A hardcoded absolute path breaks whichever deployment it isn't. -->
+    <base href="./">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="description" content="本機持倉總覽">
     <title>持倉總覽</title>

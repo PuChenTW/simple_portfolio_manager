@@ -86,3 +86,27 @@ The `Dockerfile` installs dependencies from `pyproject.toml` and `uv.lock` alone
 copied, so a source edit rebuilds in about a second instead of resyncing every dependency. Keep
 `COPY src` below that step — moving it above ties the whole dependency install to every source
 change.
+
+## Sub-path deployment
+
+The app has no URL-prefix setting, and must not grow one. A relative `<base href="./">` in
+`static/index.html` is the entire mechanism: the browser resolves it against the document's own
+URL, so assets load from `/static/…` at the domain root and `/portfolio/static/…` under a proxy
+that mounts the app at `/portfolio`, without the server knowing which happened.
+
+That is not a stylistic preference. Tailscale Serve's `--set-path` **strips the prefix before
+forwarding** and sends no `X-Forwarded-Prefix` — measured with a header-probe server behind a
+temporary `--set-path=/hdrprobe` mapping, where a request to `/hdrprobe/deep/path.js` arrived as
+`PATH: /deep/path.js`, carrying only `Host`, `User-Agent`, `Accept`, `Accept-Encoding`, the
+`Tailscale-*` identity headers, and `X-Forwarded-For` / `-Host` / `-Proto`. The README claimed
+the opposite for several releases; it was wrong.
+
+So a proxied request and a direct one are byte-identical at the app. No server-side logic can
+distinguish them, which means any per-deployment prefix config necessarily breaks whichever
+deployment it was not set for — the earlier `PORTFOLIO_URL_PREFIX` baked `<base href="/portfolio/">`
+into every response and left direct access on `localhost:8001` serving 404s for its own assets.
+Its companion `StripPrefixMiddleware` never ran at all: it stripped a prefix that never arrived.
+
+The corollary for anyone editing the dashboard: keep every asset and API path relative, and never
+hardcode a leading `/`. One absolute path silently reintroduces the bug for one of the two
+deployments. `test_api.py` asserts the `<base href>` stays `./`.

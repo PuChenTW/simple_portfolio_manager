@@ -197,25 +197,20 @@ a last-run date: `rebuild_snapshots` skips dates that already have a snapshot, s
 cheap and a missed run or a late price correction is picked up automatically. Watch its output
 with `docker compose logs portfolio-snapshot-cron`.
 
-The dashboard uses relative paths for its assets and API calls, so it can be mounted behind a
-reverse proxy under a subpath (e.g. `https://host/portfolio-manager/`). Set `PORTFOLIO_URL_PREFIX`
-to that subpath (no trailing slash, e.g. `/portfolio-manager`) so the app can strip it from
-incoming requests before routing and set the dashboard's `<base href>` accordingly -- this works
-whether or not the browser's URL ends in a trailing slash, and needs no special header support
-from the proxy, so it also covers proxies that cannot add custom headers (Tailscale Serve's
-`--set-path`, for instance, forwards the full path unchanged):
+### Running behind a sub-path
 
-```bash
-tailscale serve --bg --set-path /portfolio-manager http://127.0.0.1:8001
+Nothing to configure -- the dashboard resolves its assets and API calls relative to whatever URL
+it was loaded from, so the domain root and a sub-path both work as-is.
+
+The one requirement is that the proxy strip the prefix before forwarding, so the app receives
+`/api/v1/...` rather than `/portfolio/api/v1/...`. Most do this by default; in nginx it is the
+trailing slash on `proxy_pass` that turns it on:
+
+```nginx
+location /portfolio/ { proxy_pass http://127.0.0.1:8001/; }
 ```
 
-```bash
-PORTFOLIO_URL_PREFIX=/portfolio-manager uv run portfolio-manager
-```
-
-An nginx `location /portfolio-manager/ { proxy_pass http://127.0.0.1:8001/; }` block works the
-same way, with or without `PORTFOLIO_URL_PREFIX` depending on whether it strips the prefix itself.
-Without `PORTFOLIO_URL_PREFIX` the dashboard assumes it is mounted at the domain root.
+See @docs/ARCHITECTURE.md for why the app takes no prefix setting.
 
 ## Agent integration
 
