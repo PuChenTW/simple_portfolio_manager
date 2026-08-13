@@ -42,6 +42,7 @@ from .schemas import (
     TechnicalSnapshotRead,
     utc_now,
 )
+from .sessions import quote_ttl_for
 from .technical import bars_frame, calculate_technical, event_metrics, relative_returns
 
 ZERO = Decimal("0")
@@ -138,6 +139,17 @@ class MarketService:
         self.provider = provider
         self.ttl = timedelta(seconds=ttl_seconds)
 
+    def _ttl_for(self, instrument: Instrument, now: datetime) -> timedelta:
+        """A quote is fresh for as long as its price cannot move.
+
+        Within a session that is the configured TTL; outside one it runs to the next open, since
+        a closed market's last trade stays the last trade. This is a cache-lifetime decision
+        only -- a hit here is a genuinely current price, so it is never marked stale.
+        """
+        return timedelta(
+            seconds=quote_ttl_for(instrument.market, now, int(self.ttl.total_seconds()))
+        )
+
     def get(self, ticker: str) -> MarketState:
         symbol = ticker.strip().upper()
         instrument = self.session.get(Instrument, symbol)
@@ -146,7 +158,7 @@ class MarketService:
         if (
             instrument is not None
             and cached is not None
-            and now - _aware(cached.fetched_at) <= self.ttl
+            and now - _aware(cached.fetched_at) <= self._ttl_for(instrument, now)
         ):
             return MarketState(instrument, cached, False, [])
 

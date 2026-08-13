@@ -25,8 +25,10 @@ The read-only Traditional Chinese dashboard at `http://127.0.0.1:8001/` has four
 holdings, historical performance (NAV series with TWR and XIRR), data quality (classification
 provenance and the journal), and the cross-currency consolidated total. It never changes data.
 
-Set `PORTFOLIO_DB_PATH` to choose the SQLite database file. Quote data is fresh for 300
-seconds by default; override it with `PORTFOLIO_QUOTE_TTL_SECONDS`.
+Set `PORTFOLIO_DB_PATH` to choose the SQLite database file. Quote data is fresh for 300 seconds
+while its market is open; override that with `PORTFOLIO_QUOTE_TTL_SECONDS`. Once the market
+closes, a quote is held until the next open instead, since the last trade of the session stays
+the last trade. Crypto has no close and always uses the 300-second window.
 
 ## Typical flow
 

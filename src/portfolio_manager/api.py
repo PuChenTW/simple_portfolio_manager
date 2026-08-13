@@ -166,9 +166,13 @@ unclassified or unresolved with a warning, never filled with a plausible default
 
 ## Market-data reliability
 
-Quotes are cached for five minutes by default. If Yahoo refresh fails and an older quote exists,
-the API returns it with `stale=true` and a warning. A `503 market_data_unavailable` means no usable
-cached data exists. Do not treat this API as an execution venue or real-time market-data feed.
+Quotes are cached for five minutes by default while the instrument's market is open, and until the
+next open once it closes, since a closed market's last trade cannot change. Crypto trades
+continuously and always uses the five-minute window. A quote served from cache is current, not
+stale. If Yahoo refresh fails and an older quote exists, the API returns it with `stale=true` and
+a warning — that flag means a refresh failed, never merely that the quote was cached. A
+`503 market_data_unavailable` means no usable cached data exists. Do not treat this API as an
+execution venue or real-time market-data feed.
 Research history and technical snapshots are fetched on demand. Pass the report cutoff as `as_of`;
 then inspect the returned actual date, adjustment, provider, and warnings before using results.
 

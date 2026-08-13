@@ -894,7 +894,10 @@ check the disclosure that comes with it:
   an event whose cash flow could not be classified.
 - `converted_value_coverage_percent` and `unconverted` on a consolidated summary — an unresolvable
   currency pair is left out of the total rather than converted at a guess.
-- `stale`, `provider_as_of`, and `warnings` on a quote.
+- `stale`, `provider_as_of`, and `warnings` on a quote. `stale` means a refresh failed and an
+  older quote was returned. It does not mean the quote came from cache: a quote is cached until
+  its market reopens, and that price is current because a closed market's last trade is final.
+  Judge age with `provider_as_of` against the market's hours, not by assuming a fixed TTL.
 
 ## Error codes
 

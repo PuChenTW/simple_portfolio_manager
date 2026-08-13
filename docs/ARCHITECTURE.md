@@ -56,6 +56,37 @@ an action logs a warning naming the ticker rather than expiring entries on a gue
 restatement happened. Clearing is always safe, since the cache holds nothing that cannot be
 fetched again.
 
+## Quote freshness
+
+`sessions.py` answers when a live quote can next change, and `MarketService` caches it for exactly
+that long. The two layers are unrelated: this one governs the single current quote in `quote_cache`,
+while `cache.py` above governs daily history bars in Redis.
+
+A fixed TTL has to be wrong in one direction. Five minutes is right during a session and pointless
+after the close, when the price cannot move until the next open — an overnight dashboard refetches
+the same number every five minutes for sixteen hours. So the TTL is derived from the calendar
+rather than configured: open markets keep `PORTFOLIO_QUOTE_TTL_SECONDS`, closed ones hold until
+the next open. Nothing needs tuning because nothing was guessed.
+
+Two cases must not take the long TTL, and both fail quietly rather than loudly if they do. Crypto
+never closes, so caching it until a notional open would freeze the price indefinitely; it has no
+session entry and always uses the short window. A market whose hours are unknown gets the same
+treatment for the same reason — inventing a close for it would freeze a price that is still
+moving. The long TTL is also floored at the short one, so a quote fetched a minute before the bell
+is never cached for less than it would have been mid-session.
+
+Weekends count as closed; market holidays deliberately do not. A holiday expires the quote at the
+notional open, where the provider returns the same unchanged close and it is cached again until
+the following open — one wasted request per holiday, and never a wrong price. A hand-maintained
+holiday calendar buys that request back and costs a silent failure mode instead: once it drifts
+out of date it marks a real trading day as closed and serves yesterday's price for a full session.
+
+A closed-market cache hit is **not** stale, and must never set the flag or a warning. The price is
+genuinely current — it is the last trade, and there will not be another until the open. Marking it
+otherwise would put a warning nobody can act on on every overnight read, which is exactly the
+failure `AGENTS.md` warns about: readers learn to ignore warnings, including the ones that matter.
+`stale` stays reserved for its real meaning, a refresh that failed and fell back to a cached quote.
+
 ## The MCP surface
 
 `mcp_server.py` is a thin HTTP client that wraps each API endpoint as a tool. It also holds the

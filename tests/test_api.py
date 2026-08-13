@@ -1,7 +1,9 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+from portfolio_manager import services
 from portfolio_manager.models import QuoteCache
+from portfolio_manager.sessions import is_market_open
 
 
 def test_health_and_portfolios_are_isolated(harness) -> None:
@@ -331,7 +333,17 @@ def test_tags_normalization_and_filters(harness) -> None:
     assert [item["ticker"] for item in all_match] == ["AAPL"]
 
 
-def test_market_cache_stale_fallback_and_history(harness) -> None:
+def test_market_cache_stale_fallback_and_history(harness, monkeypatch) -> None:
+    # Pinned to a Tuesday midday in New York. This test is about the provider-failure fallback,
+    # and a 10-minute-old quote only reaches the provider while the market is open -- outside a
+    # session it is legitimately still fresh, so an unpinned clock would make this pass or fail
+    # depending on the hour it ran.
+    # Expressed in UTC, not with a -04:00 offset: SQLite stores the wall clock and drops the
+    # offset, so an offset-carrying value reads back shifted and the freshness check goes wrong.
+    midday = datetime(2026, 8, 11, 16, 0, tzinfo=UTC)  # 12:00 in New York
+    assert is_market_open("US", midday)
+    monkeypatch.setattr(services, "utc_now", lambda: midday)
+
     endpoint = "/api/v1/market/instruments/AAPL"
     fresh = harness.client.get(endpoint)
     assert fresh.status_code == 200
@@ -342,7 +354,7 @@ def test_market_cache_stale_fallback_and_history(harness) -> None:
 
     with harness.session_factory() as session:
         quote = session.get(QuoteCache, "AAPL")
-        quote.fetched_at = datetime.now(UTC) - timedelta(minutes=10)
+        quote.fetched_at = midday - timedelta(minutes=10)
         session.commit()
     harness.provider.fail = True
     stale = harness.client.get(endpoint)
