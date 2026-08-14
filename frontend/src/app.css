@@ -1,0 +1,88 @@
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-sunken: #f0f2f5;
+  --border: #dfe3e8;
+  --border-strong: #c4cad2;
+  --text: #14181f;
+  --text-muted: #5c6773;
+  --text-faint: #8a939f;
+  --accent: #2f5fd0;
+  --accent-soft: #e6ecfb;
+  --positive: #0f7b52;
+  --negative: #b4232c;
+  --warning: #8a5a00;
+  --warning-soft: #fdf3e0;
+
+  --radius: 10px;
+  --radius-sm: 6px;
+  --pad: 20px;
+
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font-num: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+
+  color-scheme: light dark;
+}
+
+:root:not([data-theme='light']) {
+  @media (prefers-color-scheme: dark) {
+    --bg: #0f1216;
+    --surface: #171b21;
+    --surface-sunken: #1e242c;
+    --border: #2a313a;
+    --border-strong: #3a434e;
+    --text: #e8ecf1;
+    --text-muted: #9aa5b1;
+    --text-faint: #6f7a87;
+    --accent: #7ea2f5;
+    --accent-soft: #1c2740;
+    --positive: #4cc38a;
+    --negative: #f0656f;
+    --warning: #e0a548;
+    --warning-soft: #2c2413;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* Financial figures align on the decimal point; proportional digits make columns jitter. */
+.num {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+}
+
+.positive {
+  color: var(--positive);
+}
+
+.negative {
+  color: var(--negative);
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.faint {
+  color: var(--text-faint);
+}

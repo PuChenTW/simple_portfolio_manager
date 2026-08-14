@@ -1,7 +1,11 @@
+import re
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path as FilePath
 
-from portfolio_manager import services
+import pytest
+
+from portfolio_manager import api, services
 from portfolio_manager.models import QuoteCache
 from portfolio_manager.sessions import is_market_open
 
@@ -498,3 +502,29 @@ def test_openapi_is_self_describing_for_agents(harness) -> None:
         "actual execution price"
         in transaction["properties"]["unit_price"]["description"].lower()
     )
+
+
+def test_v2_dashboard_is_served_with_relative_assets(harness) -> None:
+    """The built Svelte dashboard mounts at /v2 with paths that survive a stripping proxy.
+
+    Skipped when `frontend/` has not been built, since the mount is conditional on the build
+    output existing -- a developer who has not run `bun run build` still gets a working API.
+    """
+    built = FilePath(api.__file__).parent / "static" / "v2" / "index.html"
+    if not built.is_file():
+        pytest.skip("frontend/ has not been built; run `bun run build` in frontend/")
+
+    page = harness.client.get("/v2/")
+    assert page.status_code == 200
+    assert page.headers["content-type"].startswith("text/html")
+
+    # Relative asset paths are the whole sub-path deployment mechanism. A leading slash here
+    # serves a page whose assets 404 under a proxy that mounts the app below the root.
+    assets = re.findall(r'(?:src|href)="([^"]+)"', page.text)
+    assert assets, "built page referenced no assets"
+    assert all(path.startswith("./") for path in assets), assets
+
+    # Bare /v2 must reach the same page, or the relative paths resolve one directory too high.
+    redirect = harness.client.get("/v2", follow_redirects=False)
+    assert redirect.status_code in (301, 307, 308)
+    assert redirect.headers["location"].endswith("/v2/")

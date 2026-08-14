@@ -332,6 +332,23 @@ def dashboard() -> HTMLResponse:
     return HTMLResponse(_DASHBOARD_HTML)
 
 
+_V2_DIR = STATIC_DIR / "v2"
+
+# The Svelte dashboard, built by `frontend/`. Mounted at the path it is served from rather than
+# under /static, because its assets are relative (`./assets/...`) and therefore resolve against
+# the document's own directory -- serving the HTML at /v2/ while the files live at /static/v2/
+# makes every asset 404. Mounting both at /v2/ keeps them together, and `html=True` serves
+# index.html for the directory and redirects /v2 to /v2/.
+#
+# The relative paths are the same mechanism as the v1 page's <base href="./">: one build serves
+# the domain root and a prefix-stripping proxy alike. See docs/ARCHITECTURE.md.
+#
+# The directory is absent until the frontend is built, and a missing directory would crash the
+# app at import time rather than serve a stale page.
+if _V2_DIR.is_dir():
+    app.mount("/v2", StaticFiles(directory=_V2_DIR, html=True), name="dashboard-v2")
+
+
 _market_provider = build_provider(YahooMarketProvider())
 
 
