@@ -25,6 +25,7 @@ from .journal import (
     EventType,
     Leg,
     LegType,
+    PortfolioKind,
     derived_flow,
     invert,
     require_balanced,
@@ -35,6 +36,24 @@ from .services import ZERO, _aware, _fingerprint, get_portfolio
 
 # Event types whose legs move a security position.
 _SECURITY_EVENTS = frozenset({EventType.BUY, EventType.SELL})
+
+# Every event that presupposes a holding. A cash account has none, so none of these can occur in
+# one. DIVIDEND belongs here because a dividend is paid by a security; INTEREST deliberately does
+# not, because interest on a bank balance is the canonical cash-account income event.
+_HOLDING_EVENTS = _SECURITY_EVENTS | {
+    EventType.DIVIDEND,
+    EventType.SPLIT,
+    EventType.STOCK_DIVIDEND,
+    EventType.RETURN_OF_CAPITAL,
+    EventType.SYMBOL_CHANGE,
+    EventType.MERGER,
+    EventType.SPINOFF,
+}
+
+# Books that hold no position: a bank balance and a loan alike. Membership rather than an
+# equality test against CASH, so a kind added later is refused by default instead of silently
+# inheriting the right to hold securities.
+_POSITIONLESS_KINDS = frozenset({PortfolioKind.CASH.value, PortfolioKind.LIABILITY.value})
 
 
 @dataclass(frozen=True)
@@ -188,6 +207,32 @@ def build_legs(
     )
 
 
+def reject_security_activity(
+    portfolio: Portfolio, event_type: EventType, ticker: str | None
+) -> None:
+    """Refuse anything that would put a security into a book that holds no positions.
+
+    The ticker is checked as well as the event type because a fee or interest event carrying one
+    would attach an instrument to its leg, which is the same mistake wearing a different name.
+    """
+    if portfolio.kind not in _POSITIONLESS_KINDS:
+        return
+    if event_type not in _HOLDING_EVENTS and not ticker:
+        return
+    described = "a loan" if portfolio.kind == PortfolioKind.LIABILITY.value else "a cash account"
+    raise DomainError(
+        422,
+        "not_a_securities_account",
+        f"This portfolio is {described} and cannot hold securities",
+        {
+            "portfolio_id": portfolio.id,
+            "kind": portfolio.kind,
+            "event_type": event_type.value,
+            "ticker": ticker,
+        },
+    )
+
+
 def _cash_pair(
     currency: str, amount: Decimal, counter_type: LegType, role: str, *, inflow: bool
 ) -> list[Leg]:
@@ -247,6 +292,20 @@ def _income_legs(
     return legs
 
 
+def _owes_by_design(session: Session, portfolio_id: str) -> bool:
+    """Whether a negative balance is this book's normal state rather than an overdraft.
+
+    Kept separate from `allow_negative_cash`, which is a caller waiving the check for one
+    posting. This is a property of the account: a loan is negative for its whole life, and
+    collapsing the two would let a waiver anywhere read as a liability everywhere.
+
+    Looked up here rather than passed in because all four callers of `_apply_projections` would
+    otherwise have to thread a kind they have no other use for.
+    """
+    portfolio = session.get(Portfolio, portfolio_id)
+    return portfolio is not None and portfolio.kind == PortfolioKind.LIABILITY.value
+
+
 def _apply_projections(
     session: Session, portfolio_id: str, legs: list[Leg], *, allow_negative_cash: bool
 ) -> None:
@@ -274,7 +333,7 @@ def _apply_projections(
         balance = CashBalance(portfolio_id=portfolio_id, amount=ZERO, updated_at=now)
         session.add(balance)
     new_amount = balance.amount + cash_delta
-    if new_amount < ZERO and not allow_negative_cash:
+    if new_amount < ZERO and not allow_negative_cash and not _owes_by_design(session, portfolio_id):
         raise DomainError(
             422,
             "insufficient_cash",
@@ -341,6 +400,8 @@ def _persist(
     *,
     event_type: EventType,
     reverses_event_id: str | None = None,
+    transfer_id: str | None = None,
+    transfer_role: str | None = None,
 ) -> JournalEvent:
     """Write the event header and its legs. The caller owns the transaction boundary."""
     now = utc_now()
@@ -359,6 +420,8 @@ def _persist(
         source_reference=data.source_reference,
         memo=data.memo,
         reverses_event_id=reverses_event_id,
+        transfer_id=transfer_id,
+        transfer_role=transfer_role,
         created_at=now,
     )
     session.add(event)
@@ -395,6 +458,7 @@ def record_transaction(
     posting again; the same ID with different data is a conflict, never a second entry.
     """
     portfolio = get_portfolio(session, portfolio_id)
+    reject_security_activity(portfolio, data.event_type, data.ticker)
     fingerprint = _transaction_fingerprint(data)
 
     existing = session.scalar(
@@ -471,6 +535,14 @@ def reverse_transaction(
             "cannot_reverse_a_reversal",
             "A reversal cannot itself be reversed; post a replacement instead",
             {"event_id": event_id},
+        )
+    if original.transfer_id is not None:
+        # Undoing one side would leave the money in neither account or in both.
+        raise DomainError(
+            409,
+            "reverse_the_transfer_instead",
+            "This event is half of a transfer; reverse the transfer so both sides unwind together",
+            {"event_id": event_id, "transfer_id": original.transfer_id},
         )
 
     existing = session.scalar(

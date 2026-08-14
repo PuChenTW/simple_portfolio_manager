@@ -32,7 +32,12 @@ from .models import (
     Instrument,
     Position,
 )
-from .postings import TransactionRequest, _apply_projections, _persist
+from .postings import (
+    TransactionRequest,
+    _apply_projections,
+    _persist,
+    reject_security_activity,
+)
 from .schemas import utc_now
 from .services import ZERO, _aware, _fingerprint, get_portfolio
 
@@ -433,8 +438,12 @@ def apply_corporate_action(
 ) -> CorporateActionApplication:
     """Apply an action atomically, recording the journal event and the application record."""
     portfolio = get_portfolio(session, portfolio_id)
-    preview = preview_application(session, portfolio_id, action_id)
     action = get_action(session, action_id)
+    # Checked before the preview so the refusal states the real reason. A cash account holds no
+    # position, so the preview would refuse it anyway -- but for the incidental reason that
+    # nothing matched, not because such an account cannot hold a security in the first place.
+    reject_security_activity(portfolio, _ACTION_EVENT_TYPES[ActionType(action.action_type)], None)
+    preview = preview_application(session, portfolio_id, action_id)
 
     if not preview.applicable:
         raise DomainError(

@@ -7,13 +7,18 @@ its performance -- which is exactly the error that makes `total_pnl / cost_basis
 
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
 
 from portfolio_manager.errors import DomainError
 from portfolio_manager.journal import EventType
-from portfolio_manager.performance import TWR_METHOD, calculate_performance
+from portfolio_manager.performance import (
+    TWR_METHOD,
+    _daily_returns,
+    calculate_performance,
+)
 from portfolio_manager.postings import TransactionRequest, record_transaction
 from portfolio_manager.valuation import create_snapshot
 
@@ -485,3 +490,30 @@ def test_the_same_data_returns_the_same_numbers(session, harness, provider) -> N
     first = calculate_performance(session, portfolio_id, DAY0, day1)
     second = calculate_performance(session, portfolio_id, DAY0, day1)
     assert (first.twr_percent, first.xirr_percent) == (second.twr_percent, second.xirr_percent)
+
+
+def test_a_negative_base_yields_no_return_rather_than_an_inverted_one() -> None:
+    """A negative denominator divides cleanly and reports the opposite of the truth.
+
+    Modified Dietz divides the gain by the capital that produced it. When that base is negative
+    -- an overdrawn book, or a liability if one were ever measured -- the division still succeeds
+    and silently flips the sign: a balance recovering from -1,000,000 to -950,000 is a gain of
+    50,000, yet `gain / denominator` reports -5%. Only `== ZERO` was guarded before, so the wrong
+    number was returned in place of no number.
+    """
+    snapshots = [
+        SimpleNamespace(
+            total_value=Decimal("-1000000"),
+            valuation_date=datetime.combine(DAY0, datetime.min.time(), tzinfo=UTC),
+        ),
+        SimpleNamespace(
+            total_value=Decimal("-950000"),
+            valuation_date=datetime.combine(
+                DAY0 + timedelta(days=1), datetime.min.time(), tzinfo=UTC
+            ),
+        ),
+    ]
+
+    daily = _daily_returns(snapshots, [Decimal("0")])
+
+    assert [row.return_percent for row in daily] == [None]

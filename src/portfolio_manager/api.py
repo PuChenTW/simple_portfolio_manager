@@ -1,5 +1,6 @@
 import json
 from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path as FilePath
 from typing import Annotated
 
@@ -27,14 +28,14 @@ from .corporate_actions import (
     record_corporate_action,
 )
 from .db import get_session
-from .errors import DomainError
+from .errors import DomainError, not_found
 from .identity import (
     build_instrument_profile,
     map_issuer,
     resolve_instrument,
     set_classification_override,
 )
-from .journal import derived_flow
+from .journal import LegType, PortfolioKind, derived_flow
 from .market import HistoryAdjustment, HistoryInterval, MarketProvider, YahooMarketProvider
 from .models import Portfolio, PortfolioGroup
 from .performance import (
@@ -44,6 +45,7 @@ from .performance import (
 )
 from .postings import (
     TransactionRequest,
+    _legs_of,
     event_detail,
     legs_for_events,
     list_events,
@@ -55,6 +57,7 @@ from .postings import (
 from .schemas import (
     BalanceRead,
     CacheClearRead,
+    CashAccountCreate,
     ClassificationOverrideUpdate,
     ConsolidatedPositionRead,
     ConsolidatedSummaryRead,
@@ -81,6 +84,7 @@ from .schemas import (
     JournalEventPage,
     JournalEventRead,
     JournalLegRead,
+    LiabilityAccountCreate,
     MarketInstrumentRead,
     NavHistoryRead,
     PerformanceCoverageRead,
@@ -101,12 +105,18 @@ from .schemas import (
     TechnicalSnapshotRead,
     TransactionCreate,
     TransactionReverse,
+    TransferCreate,
+    TransferRead,
+    TransferReversalCreate,
+    TransferSideRead,
     UnconvertedAmountRead,
     utc_now,
 )
 from .services import (
     MarketService,
     build_summary,
+    create_cash_account,
+    create_liability_account,
     create_portfolio,
     delete_portfolio,
     get_portfolio,
@@ -114,6 +124,7 @@ from .services import (
     normalize_tag,
     replace_tags,
 )
+from .transfers import events_of, reverse_transfer, transfer_cash
 from .valuation import (
     CALCULATION_VERSION,
     SnapshotStatus,
@@ -295,7 +306,7 @@ AGENT_SKILL_METADATA = {
 
 app = FastAPI(
     title="Local Portfolio Manager",
-    version="0.4.0",
+    version="0.6.0",
     summary="Agent-friendly accounting for cash, stocks, and crypto portfolios",
     description=API_DESCRIPTION,
     openapi_tags=OPENAPI_TAGS,
@@ -497,6 +508,112 @@ def remove_portfolio(portfolio_id: PortfolioId, session: SessionDep) -> None:
     transactions, and cash balance. This cannot be undone.
     """
     delete_portfolio(session, portfolio_id)
+
+
+# --- Cash accounts ---------------------------------------------------------------------------
+
+
+@app.post(
+    "/api/v1/cash-accounts",
+    response_model=PortfolioRead,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="create_cash_account",
+    summary="Open a cash-only account",
+    response_description="The new account and its reusable UUID",
+    responses={
+        409: {
+            "model": ErrorResponse,
+            "description": "`portfolio_name_exists`: the name is already in use.",
+        }
+    },
+    tags=["cash-accounts"],
+)
+def add_cash_account(data: CashAccountCreate, session: SessionDep) -> Portfolio:
+    """
+    Track a bank balance, an e-wallet, or any pool of money held outside a broker.
+
+    The account is a portfolio in every respect except one: it cannot hold a security, so any
+    transaction naming a ticker is rejected. Deposits, withdrawals, interest, and fees post
+    through `record_transaction` exactly as they do for an investment portfolio, and the balance
+    appears in valuations, group summaries, and performance alongside everything else.
+
+    Use `transfer_cash` rather than a withdrawal plus a deposit when money moves to another
+    account you own: it records both sides as one event and cannot leave half the movement.
+    """
+    return create_cash_account(session, data)
+
+
+@app.get(
+    "/api/v1/cash-accounts",
+    response_model=list[PortfolioRead],
+    operation_id="list_cash_accounts",
+    summary="List cash-only accounts",
+    response_description="Cash accounts ordered by creation time",
+    tags=["cash-accounts"],
+)
+def list_cash_accounts(session: SessionDep) -> list[Portfolio]:
+    """The cash subset of `list_portfolios`, for totalling liquid assets held outside a broker."""
+    return list(
+        session.scalars(
+            select(Portfolio)
+            .where(Portfolio.kind == PortfolioKind.CASH.value)
+            .order_by(Portfolio.created_at)
+        ).all()
+    )
+
+
+@app.post(
+    "/api/v1/liability-accounts",
+    response_model=PortfolioRead,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="create_liability_account",
+    summary="Open an account for money owed",
+    response_description="The new account and its reusable UUID",
+    responses={
+        409: {
+            "model": ErrorResponse,
+            "description": "`portfolio_name_exists`: the name is already in use.",
+        }
+    },
+    tags=["liability-accounts"],
+)
+def add_liability_account(data: LiabilityAccountCreate, session: SessionDep) -> Portfolio:
+    """
+    Track a loan, so net worth reflects what is owed and not only what is held.
+
+    The account is a cash account with the sign reversed: its balance is the outstanding debt, so
+    it runs negative and subtracts from every total it appears in. It cannot hold a security.
+
+    Record the drawdown as a `transfer_cash` from this account to wherever the money landed, and
+    each repayment as a transfer back. Interest charged is a `fee` posted through
+    `record_transaction` -- not `interest`, which credits cash and is for interest received.
+
+    Only the balance and the cash that moves are recorded here. The rate, the schedule, and the
+    instalments remaining are not stored, and no figure in the API is derived from them.
+
+    `get_portfolio_performance` returns no return figure for this account, by design: a rate of
+    return divides a gain by the capital that produced it, and a debt is not capital at work.
+    """
+    return create_liability_account(session, data)
+
+
+@app.get(
+    "/api/v1/liability-accounts",
+    response_model=list[PortfolioRead],
+    operation_id="list_liability_accounts",
+    summary="List liability accounts",
+    response_description="Liability accounts ordered by creation time",
+    tags=["liability-accounts"],
+)
+def list_liability_accounts(session: SessionDep) -> list[Portfolio]:
+    """The debt subset of `list_portfolios`, for totalling what is owed across lenders."""
+    return list(
+        session.scalars(
+            select(Portfolio)
+            .where(Portfolio.kind == PortfolioKind.LIABILITY.value)
+            .order_by(Portfolio.created_at)
+        ).all()
+    )
 
 
 @app.get(
@@ -1034,6 +1151,153 @@ def _event_detail_response(
         reverses_event_id=detail["reverses_event_id"],
         reversed_by_event_id=detail["reversed_by_event_id"],
     )
+
+
+# --- Transfers -------------------------------------------------------------------------------
+
+
+def _transfer_response(session: Session, transfer_id: str) -> TransferRead:
+    """Assemble both halves of a transfer from the events carrying its id."""
+    events = events_of(session, transfer_id)
+    if not events:
+        raise not_found("transfer", transfer_id)
+
+    originals = [event for event in events if event.reverses_event_id is None]
+    out_event = next(event for event in originals if event.transfer_role == "out")
+    in_event = next(event for event in originals if event.transfer_role == "in")
+
+    def side(event, role: str) -> TransferSideRead:
+        cash = sum(
+            (
+                leg.amount_delta or Decimal("0")
+                for leg in _legs_of(session, event.id)
+                if leg.leg_type is LegType.CASH
+            ),
+            start=Decimal("0"),
+        )
+        return TransferSideRead(
+            portfolio_id=event.portfolio_id,
+            event_id=event.id,
+            currency=event.functional_currency,
+            amount=cash,
+            role=role,
+        )
+
+    sent = side(out_event, "out")
+    received = side(in_event, "in")
+    rate = None
+    if sent.currency != received.currency and sent.amount:
+        rate = received.amount / -sent.amount
+
+    return TransferRead(
+        transfer_id=transfer_id,
+        status=out_event.status,
+        occurred_at=out_event.occurred_at,
+        fx_rate=rate,
+        sent=sent,
+        received=received,
+    )
+
+
+@app.post(
+    "/api/v1/transfers",
+    response_model=TransferRead,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="transfer_cash",
+    summary="Move cash between two portfolios",
+    response_description="Both halves of the transfer and the rate between them",
+    responses={
+        404: {"model": ErrorResponse, "description": "`portfolio_not_found`."},
+        409: {
+            "model": ErrorResponse,
+            "description": "`idempotency_conflict`: the request_id was reused with other data.",
+        },
+        422: {
+            "model": ErrorResponse,
+            "description": (
+                "`self_transfer`, `invalid_amount`, `insufficient_cash`, `fx_rate_required` "
+                "when the currencies differ, or `unexpected_fx_rate` when they do not."
+            ),
+        },
+    },
+    tags=["transfers"],
+)
+def post_transfer(data: TransferCreate, session: SessionDep) -> TransferRead:
+    """
+    Record money moving between two accounts you own, as one indivisible event.
+
+    Prefer this to a withdrawal in one portfolio and a deposit in the other. Those are two
+    unlinked events: if the second fails, the money exists in neither account, and nothing in
+    the journal says the two were ever related. A transfer writes both halves in one database
+    transaction, so either both exist or neither does.
+
+    When the two portfolios use different currencies, `fx_rate` is required and must be the rate
+    you actually got. This service will not look one up: a market rate differs from an executed
+    rate, and the difference would land in the ledger as cash from nowhere.
+
+    Reverse it with `reverse_transfer`, never by reversing one side.
+    """
+    out_event, _ = transfer_cash(
+        session,
+        data.from_portfolio_id,
+        data.to_portfolio_id,
+        data.request_id,
+        data.amount,
+        fx_rate=data.fx_rate,
+        occurred_at=data.occurred_at,
+        source_reference=data.source_reference,
+        memo=data.memo,
+    )
+    return _transfer_response(session, out_event.transfer_id)
+
+
+@app.get(
+    "/api/v1/transfers/{transfer_id}",
+    response_model=TransferRead,
+    operation_id="get_transfer",
+    summary="Read both sides of a transfer",
+    response_description="The sent and received halves with their conversion",
+    responses={404: {"model": ErrorResponse, "description": "`transfer_not_found`."}},
+    tags=["transfers"],
+)
+def read_transfer(transfer_id: str, session: SessionDep) -> TransferRead:
+    """Audit one movement end to end, including the rate applied between two currencies."""
+    return _transfer_response(session, transfer_id)
+
+
+@app.post(
+    "/api/v1/transfers/{transfer_id}/reversal",
+    response_model=TransferRead,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="reverse_transfer",
+    summary="Unwind both sides of a transfer",
+    response_description="The transfer, now reversed",
+    responses={
+        404: {"model": ErrorResponse, "description": "`transfer_not_found`."},
+        409: {
+            "model": ErrorResponse,
+            "description": "`already_reversed`: this transfer was undone already.",
+        },
+        422: {
+            "model": ErrorResponse,
+            "description": (
+                "`insufficient_cash`: the destination no longer holds the money to send back."
+            ),
+        },
+    },
+    tags=["transfers"],
+)
+def post_transfer_reversal(
+    transfer_id: str, data: TransferReversalCreate, session: SessionDep
+) -> TransferRead:
+    """
+    Undo both halves together, leaving the originals and their reversals in the journal.
+
+    If the destination already spent the money this is refused rather than allowed to overdraw:
+    move the cash back first. Reversing only one side is refused by `reverse_transaction`.
+    """
+    reverse_transfer(session, transfer_id, data.request_id, memo=data.memo)
+    return _transfer_response(session, transfer_id)
 
 
 @app.post(
@@ -1858,6 +2122,9 @@ def get_consolidated_summary(
         securities_value=summary.securities_value,
         cash_value=summary.cash_value,
         total_value=summary.total_value,
+        assets_value=summary.assets_value,
+        liabilities_value=summary.liabilities_value,
+        net_value=summary.net_value,
         unconverted=[
             UnconvertedAmountRead(
                 currency=item.currency, amount=item.amount, reason=item.reason

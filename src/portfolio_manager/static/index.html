@@ -55,11 +55,11 @@
       <section id="dashboard" class="dashboard" data-panel="overview" hidden>
         <section class="summary-grid" aria-label="投資組合摘要">
           <article class="metric metric--primary">
-            <p>總資產</p>
+            <p id="total-value-label">總資產</p>
             <strong id="total-value">—</strong>
             <span id="portfolio-currency" class="metric__detail"></span>
           </article>
-          <article class="metric">
+          <article id="metric-securities" class="metric">
             <p>證券市值</p>
             <strong id="securities-value">—</strong>
             <span class="metric__detail">不含現金</span>
@@ -69,24 +69,24 @@
             <strong id="cash-value">—</strong>
             <span id="cash-weight" class="metric__detail">—</span>
           </article>
-          <article class="metric">
+          <article id="metric-total-pnl" class="metric">
             <p>總損益</p>
             <strong id="total-pnl">—</strong>
             <span id="total-pnl-detail" class="metric__detail">—</span>
           </article>
-          <article class="metric">
+          <article id="metric-realized-pnl" class="metric">
             <p>已實現損益</p>
             <strong id="realized-pnl">—</strong>
             <span class="metric__detail">已完成交易</span>
           </article>
-          <article class="metric">
+          <article id="metric-unrealized-pnl" class="metric">
             <p>未實現損益</p>
             <strong id="unrealized-pnl">—</strong>
             <span class="metric__detail">現有持倉</span>
           </article>
         </section>
 
-        <section class="panel allocation-panel" aria-labelledby="allocation-title">
+        <section id="allocation-section" class="panel allocation-panel" aria-labelledby="allocation-title">
           <div class="panel__heading">
             <div>
               <p class="eyebrow">ALLOCATION</p>
@@ -100,7 +100,7 @@
 
         <section id="warnings" class="warnings" aria-label="資料警示" hidden></section>
 
-        <section class="panel positions-panel" aria-labelledby="positions-title">
+        <section id="positions-section" class="panel positions-panel" aria-labelledby="positions-title">
           <div class="panel__heading">
             <div>
               <p class="eyebrow">HOLDINGS</p>
@@ -300,9 +300,19 @@
         <div id="group-content" hidden>
           <section class="summary-grid summary-grid--four" aria-label="合併摘要">
             <article class="metric metric--primary">
-              <p>總資產（換算後）</p>
+              <p>淨值（換算後）</p>
               <strong id="c-total">—</strong>
               <span id="c-currency" class="metric__detail">—</span>
+            </article>
+            <article class="metric" id="c-assets-metric" hidden>
+              <p>總資產</p>
+              <strong id="c-assets">—</strong>
+              <span class="metric__detail">扣除負債前</span>
+            </article>
+            <article class="metric" id="c-liabilities-metric" hidden>
+              <p>總負債</p>
+              <strong id="c-liabilities">—</strong>
+              <span id="c-liabilities-detail" class="metric__detail">—</span>
             </article>
             <article class="metric">
               <p>證券市值</p>

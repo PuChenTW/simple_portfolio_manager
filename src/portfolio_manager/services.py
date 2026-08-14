@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from .errors import DomainError, not_found
 from .identity import YAHOO_PROVIDER, apply_provider_classification, ensure_alias
+from .journal import PortfolioKind
 from .market import (
     HistoryAdjustment,
     HistoryInterval,
@@ -31,8 +32,10 @@ from .models import (
     QuoteCache,
 )
 from .schemas import (
+    CashAccountCreate,
     CashPositionRead,
     IndicatorsRead,
+    LiabilityAccountCreate,
     MarketInstrumentRead,
     PortfolioCreate,
     PortfolioRead,
@@ -72,9 +75,38 @@ def get_portfolio(session: Session, portfolio_id: str) -> Portfolio:
 
 
 def create_portfolio(session: Session, data: PortfolioCreate) -> Portfolio:
+    return _create_book(session, data.name, data.base_currency, PortfolioKind.INVESTMENT, None)
+
+
+def create_cash_account(session: Session, data: CashAccountCreate) -> Portfolio:
+    """Open a cash-only book: same structure, minus the ability to hold a position."""
+    return _create_book(
+        session, data.name, data.base_currency, PortfolioKind.CASH, data.institution
+    )
+
+
+def create_liability_account(session: Session, data: LiabilityAccountCreate) -> Portfolio:
+    """Open a book for money owed: a loan, recorded as a balance that runs negative."""
+    return _create_book(
+        session, data.name, data.base_currency, PortfolioKind.LIABILITY, data.institution
+    )
+
+
+def _create_book(
+    session: Session,
+    name: str,
+    base_currency: str,
+    kind: PortfolioKind,
+    institution: str | None,
+) -> Portfolio:
     now = utc_now()
     portfolio = Portfolio(
-        id=str(uuid4()), name=data.name, base_currency=data.base_currency, created_at=now
+        id=str(uuid4()),
+        name=name,
+        base_currency=base_currency,
+        kind=kind.value,
+        institution=institution,
+        created_at=now,
     )
     session.add(portfolio)
     try:
@@ -87,7 +119,7 @@ def create_portfolio(session: Session, data: PortfolioCreate) -> Portfolio:
             409,
             "portfolio_name_exists",
             "A portfolio with this name already exists",
-            {"name": data.name},
+            {"name": name},
         ) from exc
     return portfolio
 

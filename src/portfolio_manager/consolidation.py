@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from .errors import DomainError, not_found
 from .fx import Conversion, FxService, FxUnavailable
+from .journal import PortfolioKind
 from .market import MarketProvider
 from .models import (
     Instrument,
@@ -102,6 +103,13 @@ class ConsolidatedSummary:
     securities_value: Decimal
     cash_value: Decimal
     total_value: Decimal
+    # `total_value` was always the net figure -- every total here is a plain signed sum, so a
+    # liability member subtracted correctly before these three existed. They split that one
+    # number into what is owned and what is owed, because a net worth alone cannot distinguish
+    # holding 5M in cash from holding 15M against a 10M loan.
+    assets_value: Decimal
+    liabilities_value: Decimal
+    net_value: Decimal
     unconverted: list[UnconvertedAmount]
     converted_value_coverage_percent: Decimal
     fx_rates_used: list[Conversion]
@@ -256,6 +264,9 @@ def build_consolidated_summary(
     rates: dict[str, Conversion] = {}
     positions: list[ConsolidatedPosition] = []
     cash_local: dict[str, Decimal] = {}
+    # The liability share of the same cash, kept per currency so it converts by the same path.
+    # Splitting after conversion would have to guess which currency the debt was in.
+    debt_local: dict[str, Decimal] = {}
     unconverted: list[UnconvertedAmount] = []
 
     securities_value = ZERO
@@ -269,6 +280,10 @@ def build_consolidated_summary(
         cash_local[portfolio.base_currency] = (
             cash_local.get(portfolio.base_currency, ZERO) + state.cash
         )
+        if portfolio.kind == PortfolioKind.LIABILITY.value:
+            debt_local[portfolio.base_currency] = (
+                debt_local.get(portfolio.base_currency, ZERO) + state.cash
+            )
 
         for holding in state.positions:
             if holding.quantity <= ZERO:
@@ -293,6 +308,9 @@ def build_consolidated_summary(
     )
 
     total_value = securities_value + cash_value
+    # Reuses the rates resolved above, so a liability converts exactly as its cash already did
+    # and the split can never disagree with the total it came from.
+    liabilities_value = _converted_debt(fx, debt_local, currency, valuation_date, rates)
     coverage = _coverage(total_value, unconverted_value)
     _describe(warnings, unconverted, rates, coverage)
 
@@ -309,6 +327,13 @@ def build_consolidated_summary(
         securities_value=securities_value,
         cash_value=cash_value,
         total_value=total_value,
+        # Assets are what is left after the debt is taken back out, so the three always satisfy
+        # assets + liabilities == net. Liabilities stay negative rather than being flipped to a
+        # magnitude: every other figure here is signed, and one that is not invites a reader to
+        # add where they should subtract.
+        assets_value=total_value - liabilities_value,
+        liabilities_value=liabilities_value,
+        net_value=total_value,
         unconverted=unconverted,
         converted_value_coverage_percent=coverage,
         fx_rates_used=sorted(rates.values(), key=lambda item: item.base_currency),
@@ -398,6 +423,30 @@ def _consolidate_cash(
         total += converted
         rows.append(CurrencyTotal(local_currency, amount, converted))
     return total, rows
+
+
+def _converted_debt(
+    fx: FxService,
+    debt_local: dict[str, Decimal],
+    currency: str,
+    valuation_date: date,
+    rates: dict[str, Conversion],
+) -> Decimal:
+    """The liability share of cash, in the reporting currency.
+
+    Every rate needed here was already resolved while converting the same balances as cash, so
+    this reads from the cache and cannot reach a different answer. A pair that was unavailable
+    then is skipped now for the same reason -- it was already excluded from `total_value` and
+    listed under `unconverted`, and converting it here would put a guessed figure into the split
+    of a total that never contained it.
+    """
+    total = ZERO
+    for local_currency, amount in sorted(debt_local.items()):
+        conversion = _rate_for(fx, local_currency, currency, valuation_date, rates)
+        if isinstance(conversion, FxUnavailable):
+            continue
+        total += conversion.apply(amount)
+    return total
 
 
 def _rate_for(

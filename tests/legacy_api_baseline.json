@@ -422,6 +422,12 @@
      "title": "As Of",
      "type": "string"
     },
+    "assets_value": {
+     "description": "What the group owns: `net_value` with the liabilities taken back out.",
+     "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+     "title": "Assets Value",
+     "type": "string"
+    },
     "calculation_method": {
      "title": "Calculation Method",
      "type": "string"
@@ -472,6 +478,18 @@
      },
      "title": "Issuer Exposure",
      "type": "array"
+    },
+    "liabilities_value": {
+     "description": "What the group owes, as a negative number so that `assets_value` + `liabilities_value` == `net_value`. Zero when the group holds no liability account.",
+     "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+     "title": "Liabilities Value",
+     "type": "string"
+    },
+    "net_value": {
+     "description": "Assets less liabilities. Identical to `total_value`, which was always net.",
+     "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+     "title": "Net Value",
+     "type": "string"
     },
     "portfolio_ids": {
      "items": {
@@ -530,6 +548,9 @@
     "securities_value",
     "cash_value",
     "total_value",
+    "assets_value",
+    "liabilities_value",
+    "net_value",
     "unconverted",
     "converted_value_coverage_percent",
     "fx_rates_used",
@@ -3113,6 +3134,23 @@
     "id": {
      "title": "Id",
      "type": "string"
+    },
+    "institution": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "The bank or broker holding the account, when recorded.",
+     "title": "Institution"
+    },
+    "kind": {
+     "$ref": "#/components/schemas/PortfolioKind",
+     "default": "investment",
+     "description": "`investment` holds securities and cash; `cash` holds only cash and rejects any transaction that would create a position."
     },
     "name": {
      "title": "Name",
@@ -7352,5 +7390,5 @@
    "type": "object"
   }
  },
- "version": "0.4.0"
+ "version": "0.6.0"
 }

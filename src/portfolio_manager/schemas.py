@@ -5,7 +5,7 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
-from .journal import ActionType, EventType, FlowClassification
+from .journal import ActionType, EventType, FlowClassification, PortfolioKind
 from .market import HistoryAdjustment, HistoryInterval
 from .taxonomy import Provenance
 
@@ -79,7 +79,164 @@ class PortfolioRead(ApiModel):
     id: str
     name: str
     base_currency: str
+    kind: PortfolioKind = Field(
+        default=PortfolioKind.INVESTMENT,
+        description=(
+            "`investment` holds securities and cash; `cash` holds only cash and rejects any "
+            "transaction that would create a position."
+        ),
+    )
+    institution: str | None = Field(
+        default=None, description="The bank or broker holding the account, when recorded."
+    )
     created_at: datetime
+
+
+class CashAccountCreate(ApiModel):
+    """Open an account that holds cash and never a position.
+
+    A savings account, an e-wallet, or the settlement balance of a broker tracked on its own.
+    It is a portfolio in every other respect: the same journal, valuation, and performance.
+    """
+
+    name: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
+        Field(description="Unique human-readable account name.", examples=["Cathay savings"]),
+    ]
+    base_currency: str = Field(
+        description="Three-letter ISO currency. The account holds this currency only.",
+        examples=["TWD"],
+    )
+    institution: str | None = Field(
+        default=None,
+        description="The bank or provider holding the money.",
+        examples=["Cathay United Bank"],
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "name": "Cathay savings",
+                    "base_currency": "TWD",
+                    "institution": "Cathay United Bank",
+                }
+            ]
+        }
+    )
+
+    @field_validator("base_currency")
+    @classmethod
+    def validate_currency(cls, value: str) -> str:
+        value = value.strip().upper()
+        if len(value) != 3 or not value.isalpha() or not value.isascii():
+            raise ValueError("base_currency must be a three-letter ISO currency code")
+        return value
+
+
+class LiabilityAccountCreate(ApiModel):
+    """Open an account for money owed: a personal loan, a mortgage, a credit line.
+
+    The same book as a cash account with the sign reversed. Its balance is what is outstanding,
+    so it runs negative and subtracts from net worth. Drawing the loan down and repaying it are
+    ordinary transfers between this account and wherever the money went.
+
+    It records the balance and the cash that moves, not the loan's terms: there is no rate,
+    schedule, or remaining-instalment count here, and `institution` is where a note about them
+    belongs until something actually computes with them.
+    """
+
+    name: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
+        Field(description="Unique human-readable account name.", examples=["Cathay credit loan"]),
+    ]
+    base_currency: str = Field(
+        description="Three-letter ISO currency. The debt is denominated in this currency only.",
+        examples=["TWD"],
+    )
+    institution: str | None = Field(
+        default=None,
+        description="The lender.",
+        examples=["Cathay United Bank"],
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "name": "Cathay credit loan",
+                    "base_currency": "TWD",
+                    "institution": "Cathay United Bank",
+                }
+            ]
+        }
+    )
+
+    @field_validator("base_currency")
+    @classmethod
+    def validate_currency(cls, value: str) -> str:
+        value = value.strip().upper()
+        if len(value) != 3 or not value.isalpha() or not value.isascii():
+            raise ValueError("base_currency must be a three-letter ISO currency code")
+        return value
+
+
+class TransferCreate(ApiModel):
+    """Move cash between two portfolios as one indivisible event."""
+
+    request_id: RequestId
+    from_portfolio_id: str = Field(description="The portfolio the money leaves.")
+    to_portfolio_id: str = Field(description="The portfolio the money arrives in.")
+    amount: PositiveDecimal = Field(
+        description="Amount leaving the source, in the source's currency."
+    )
+    fx_rate: PositiveDecimal | None = Field(
+        default=None,
+        description=(
+            "Destination units per source unit, as actually executed. Required when the two "
+            "portfolios differ in currency and rejected when they do not. This service never "
+            "supplies a market rate here: the gap between a market rate and the one you were "
+            "given would enter the ledger as cash that came from nowhere."
+        ),
+        examples=["0.03125"],
+    )
+    occurred_at: datetime | None = Field(
+        default=None, description="When the transfer happened. Defaults to now."
+    )
+    source_reference: str | None = None
+    memo: str | None = None
+
+
+class TransferSideRead(ApiModel):
+    """One half of a transfer, as recorded in its own portfolio."""
+
+    portfolio_id: str
+    event_id: str
+    currency: str
+    amount: Decimal = Field(description="Signed: negative leaving the source, positive arriving.")
+    role: str = Field(description="`out` or `in`.")
+
+
+class TransferRead(ApiModel):
+    """Both halves of one transfer and the rate between them."""
+
+    transfer_id: str
+    status: str = Field(description="`posted` or `reversed`.")
+    occurred_at: datetime
+    fx_rate: Decimal | None = Field(
+        default=None, description="Null when both portfolios share a currency."
+    )
+    sent: TransferSideRead
+    received: TransferSideRead
+
+
+class TransferReversalCreate(ApiModel):
+    """Unwind both halves of a transfer together."""
+
+    request_id: RequestId
+    memo: str | None = None
 
 
 class TagsUpdate(ApiModel):
@@ -1075,6 +1232,18 @@ class ConsolidatedSummaryRead(ApiModel):
     cash_value: Decimal
     total_value: Decimal = Field(
         description="Converted value only. Anything in `unconverted` is excluded from this."
+    )
+    assets_value: Decimal = Field(
+        description="What the group owns: `net_value` with the liabilities taken back out."
+    )
+    liabilities_value: Decimal = Field(
+        description=(
+            "What the group owes, as a negative number so that `assets_value` + "
+            "`liabilities_value` == `net_value`. Zero when the group holds no liability account."
+        )
+    )
+    net_value: Decimal = Field(
+        description="Assets less liabilities. Identical to `total_value`, which was always net."
     )
     unconverted: list[UnconvertedAmountRead]
     converted_value_coverage_percent: Decimal = Field(

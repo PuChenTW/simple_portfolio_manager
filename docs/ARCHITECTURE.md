@@ -20,6 +20,100 @@ per row.
 
 `corporate_actions.py` records, previews, and applies issuer events.
 
+## Cash accounts and transfers
+
+A cash account is a `Portfolio` with `kind = "cash"` — the same journal, replay, valuation, and
+performance machinery, minus the ability to hold a position. That reuse is possible because
+`cash_balances` has no currency column: a portfolio's `base_currency` *is* its cash currency, so a
+bank balance was always expressible as a portfolio that never bought anything. What the kind adds
+is a refusal. `reject_security_activity` lives in `postings.py` rather than the route layer
+because `corporate_actions.py` posts through `_persist` and `_apply_projections` directly, and a
+guard in the API would let a split into a savings account through the side door.
+
+`transfers.py` moves cash between two portfolios. A journal event belongs to exactly one
+portfolio, so a transfer is **two** events sharing a `transfer_id`, written in one transaction.
+The alternative — two unlinked events, one per side — is what the codebase had, and it can leave
+money in neither account when the second post fails, with nothing recording that the two were the
+same movement.
+
+Each half balances on its own, in its own portfolio's currency. This is why a cross-currency
+transfer is not one event holding two currencies: `validate_balance` nets every leg into a single
+functional currency, so such an event balances only after converting one side, and a residual that
+is zero in one currency's terms is an unbalanced event wearing an exchange rate. Keeping the halves
+separate is also what left `replay.py` untouched — each portfolio still sees one ordinary event of
+a type it already knew.
+
+The executed rate is stored in the counter-leg's `leg_metadata`, never in `Leg.fx_rate`.
+`functional_amount` multiplies by that field unconditionally, and both legs are already in their
+event's own currency, so a rate there would scale one side of a balanced pair. The rate is the
+user's to supply: a market rate differs from the one a bank actually gave, and the gap would post
+as cash from nowhere.
+
+`transfer_id` is deliberately not a foreign key. The pair spans two portfolios, so a constraint
+would either block deleting one side or corrupt the survivor's link; a dangling id is honest,
+because the counterparty record really is gone. `transfer_role` is stored rather than derived,
+since the reversal of a transfer-out carries an inflow sign and the cash sign alone cannot say
+which side an event belongs to.
+
+Transfers stay **external** in `classify_flow`, unchanged. At the single-portfolio level that is
+correct — the money genuinely crossed that book's boundary, and TWR must neutralize it or moving
+cash into a broker would read as a return. Netting a pair is a group-level question, and
+`consolidation.py` computes no group-level flow or return today, so there is nothing to distort.
+The `transfer_id` and the counterparty in the leg metadata make the pairs identifiable whenever a
+group-level return is built; the correction belongs with that feature, not before it.
+
+## Liability accounts
+
+A loan is `kind = "liability"`: the same book again, with the balance meaning what is owed. It
+needed almost no new machinery, because the ledger was always signed. Cash legs carry a direction,
+`replay.py` folds them into a plain sum, `valuation.py:246` adds `securities + cash` with no clamp,
+and `consolidation.py` sums members the same way — so a negative balance already flowed through
+every total correctly. What was missing was permission for it to exist.
+
+That permission is `_owes_by_design` in `postings.py`, deliberately **not** folded into the
+existing `allow_negative_cash` parameter. The two answer different questions: `allow_negative_cash`
+is a caller waiving the overdraft check for one posting, while the kind is a standing property of
+the account. Collapsing them would let a waiver anywhere read as a liability everywhere. It is
+looked up inside `_apply_projections` rather than passed in because all four callers would
+otherwise have to thread a kind they have no other use for — and because putting it there is what
+let `transfers.py` keep its hardcoded `allow_negative_cash=False`: a drawdown is an ordinary
+transfer whose loan side is permitted to go negative by the account, not by the transfer.
+
+`reject_security_activity` tests set membership rather than equality against `CASH`. An equality
+test would have let securities into a loan account through the kind added next, and the guard
+would have failed open — silently, since nothing else refuses a position.
+
+**Interest charged is a `fee`, not `interest`.** `build_legs` routes `INTEREST` to `_income_legs`,
+which credits cash: it is interest *received*, the canonical cash-account income event. A loan's
+interest moves the other way. `FEE` already produces a negative cash leg and already classifies
+as internal, so it is the correct existing vocabulary rather than a near-miss. Adding an
+`INTEREST_EXPENSE` type would touch the enum, the flow sets, `build_legs`, the taxonomy resource,
+and the MCP error codes to buy a distinction between interest and an origination fee that nothing
+currently computes with.
+
+**Performance refuses rather than reports.** `calculate_performance` returns no TWR or XIRR for a
+liability book, with the reason attached. A rate of return divides a gain by the capital that
+earned it, and a debt is not capital at work. This is not a limitation being papered over: run
+through Modified Dietz, a base of −1,000,000 recovering to −950,000 is a gain of 50,000 divided by
+a negative denominator, reported as **−5%**. Repaying a loan would read as a loss. The denominator
+guard in `_daily_returns` was widened from `== ZERO` to `<= ZERO` for the same reason, so any book
+that reaches a non-positive base — a margin overdraft, say — yields no number instead of an
+inverted one.
+
+The consolidated summary splits its total into `assets_value`, `liabilities_value`, and
+`net_value`. `net_value` **is** `total_value`, unchanged; the split exists because one net figure
+cannot tell 5M in cash from 15M against a 10M loan. Liabilities stay negative rather than being
+flipped to a magnitude, so the three reconcile by addition and a reader cannot add where they
+should subtract. Debt is bucketed per currency *before* conversion and reuses the rates already
+resolved for the same balances as cash, so the split can never disagree with the total it came
+from, and an unconvertible pair stays excluded from both.
+
+One known rough edge, deliberately left: allocation weights divide by total value
+(`services.py`, `consolidation.py`), so a group whose debts exceed its assets produces negative
+weights. `safeWidth` in the dashboard rejects them and renders a zero-width bar, so nothing
+breaks visibly. Changing the denominator to gross assets would alter every existing account's
+existing numbers, which is a separate decision from recording a debt.
+
 ## Historical valuation
 
 `replay.py` rebuilds positions, cash, and flow totals at any cutoff by folding journal legs. It is
@@ -110,6 +204,18 @@ Each bump to `tests/legacy_api_baseline.json` was a deliberate decision, not a r
   so reading a day of activity costs one request rather than one per event.
 - **0.4.0** — additive. `clear_market_cache` drops cached price history for one ticker, needed
   because the Redis layer cannot tell when a provider restates its auto-adjusted bars.
+- **0.5.0** — cash accounts and transfers. Five operations, five models, five tools, and the one
+  frozen shape that moved: `PortfolioRead` gained `kind` and `institution`. `list_portfolios` is
+  how a caller discovers portfolios, and without `kind` on that response it cannot tell a bank
+  account from a brokerage account without a second request each — a worse contract than the
+  break. Both fields default, so a client that ignores them reads what it read before.
+- **0.6.0** — liability accounts. Two operations, one model, two tools, and three fields added to
+  `ConsolidatedSummaryRead`. The fields are what forced the bump: `assets_value`,
+  `liabilities_value`, and `net_value` split a number that was already correct, because
+  `total_value` alone cannot say whether a net figure is cash or the remainder after a loan.
+  `PortfolioKind` also gained `liability`, which the baseline does **not** freeze — it captures a
+  `$ref`, not the members — so a client switching on `kind` should treat an unknown value as a
+  book it cannot interpret rather than defaulting it to `investment`.
 
 ## Container build ordering
 

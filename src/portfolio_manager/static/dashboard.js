@@ -40,6 +40,7 @@ const elements = {
   status: document.querySelector("#status"),
   valuationTime: document.querySelector("#valuation-time"),
   totalValue: document.querySelector("#total-value"),
+  totalValueLabel: document.querySelector("#total-value-label"),
   currency: document.querySelector("#portfolio-currency"),
   securitiesValue: document.querySelector("#securities-value"),
   cashValue: document.querySelector("#cash-value"),
@@ -51,6 +52,15 @@ const elements = {
   allocationBar: document.querySelector("#allocation-bar"),
   allocationLegend: document.querySelector("#allocation-legend"),
   allocationCaption: document.querySelector("#allocation-caption"),
+  allocationSection: document.querySelector("#allocation-section"),
+  positionsSection: document.querySelector("#positions-section"),
+  // Tiles that only mean something when the book can hold a security.
+  securitiesMetrics: [
+    document.querySelector("#metric-securities"),
+    document.querySelector("#metric-total-pnl"),
+    document.querySelector("#metric-realized-pnl"),
+    document.querySelector("#metric-unrealized-pnl"),
+  ],
   warnings: document.querySelector("#warnings"),
   positionsCount: document.querySelector("#positions-count"),
   positionsBody: document.querySelector("#positions-body"),
@@ -104,6 +114,11 @@ const elements = {
   groupContent: document.querySelector("#group-content"),
   cTotal: document.querySelector("#c-total"),
   cCurrency: document.querySelector("#c-currency"),
+  cAssetsMetric: document.querySelector("#c-assets-metric"),
+  cAssets: document.querySelector("#c-assets"),
+  cLiabilitiesMetric: document.querySelector("#c-liabilities-metric"),
+  cLiabilities: document.querySelector("#c-liabilities"),
+  cLiabilitiesDetail: document.querySelector("#c-liabilities-detail"),
   cSecurities: document.querySelector("#c-securities"),
   cCash: document.querySelector("#c-cash"),
   cCashDetail: document.querySelector("#c-cash-detail"),
@@ -256,15 +271,24 @@ function showStatus(message, error = false, retry = false) {
   elements.status.append(container);
 }
 
+// Investment is the default and needs no marker; the other kinds do, because a bank balance and
+// a loan look identical to a brokerage account once they are just a name and a number.
+const KIND_LABELS = { cash: "現金帳戶", liability: "負債帳戶" };
+
 function populatePortfolioSelect() {
   clear(elements.select);
   for (const portfolio of state.portfolios) {
     const option = document.createElement("option");
     option.value = portfolio.id;
-    option.textContent = `${portfolio.name} (${portfolio.base_currency})`;
+    const marker = KIND_LABELS[portfolio.kind] ? ` · ${KIND_LABELS[portfolio.kind]}` : "";
+    option.textContent = `${portfolio.name} (${portfolio.base_currency})${marker}`;
     option.selected = portfolio.id === state.selectedId;
     elements.select.append(option);
   }
+}
+
+function selectedPortfolio() {
+  return state.portfolios.find((portfolio) => portfolio.id === state.selectedId) ?? null;
 }
 
 function safeWidth(value) {
@@ -361,9 +385,19 @@ function renderPositions(summary) {
 
 function renderSummary(summary) {
   const currency = summary.portfolio.base_currency;
+  const kind = summary.portfolio.kind;
+  // A loan holds no securities either, so it hides exactly what a cash account hides.
+  const isCash = kind === "cash" || kind === "liability";
   elements.dashboard.hidden = false;
   elements.valuationTime.textContent = `估值時間：${formatTime(summary.valuation_as_of)}`;
-  elements.currency.textContent = `基準貨幣：${currency}`;
+  const institution = summary.portfolio.institution;
+  const kindLabel = KIND_LABELS[kind];
+  elements.currency.textContent = kindLabel
+    ? `${kindLabel}${institution ? ` · ${institution}` : ""} · 基準貨幣：${currency}`
+    : `基準貨幣：${currency}`;
+  // "總資產" over a negative number is a contradiction, and this is the one figure a loan
+  // account has -- getting its name wrong makes the whole view read as an error.
+  elements.totalValueLabel.textContent = kind === "liability" ? "負債餘額" : "總資產";
   setMoneyValue(elements.totalValue, summary.total_value, currency);
   setMoneyValue(elements.securitiesValue, summary.securities_value, currency);
   setMoneyValue(elements.cashValue, summary.cash_value, currency);
@@ -372,9 +406,17 @@ function renderSummary(summary) {
   elements.totalPnlDetail.textContent = `已實現 ${formatMoney(summary.realized_pnl, currency)} · 未實現 ${formatMoney(summary.unrealized_pnl, currency)}`;
   setPnlValue(elements.realizedPnl, summary.realized_pnl, currency);
   setPnlValue(elements.unrealizedPnl, summary.unrealized_pnl, currency);
-  renderAllocation(summary);
+  // A cash account has no securities by definition, so the holdings table, the allocation bar,
+  // and every P&L tile would read a permanent zero. Hiding them is not hiding information --
+  // leaving them would bury the one figure that does move under four that never can.
+  elements.allocationSection.hidden = isCash;
+  elements.positionsSection.hidden = isCash;
+  elements.securitiesMetrics.forEach((metric) => { metric.hidden = isCash; });
+  if (!isCash) {
+    renderAllocation(summary);
+    renderPositions(summary);
+  }
   renderWarnings(summary);
-  renderPositions(summary);
 }
 
 async function loadSummary() {
@@ -1077,6 +1119,17 @@ function renderConsolidated(summary) {
 
   setMoneyValue(elements.cTotal, summary.total_value, currency);
   elements.cCurrency.textContent = `${summary.group_name} · ${summary.portfolio_ids.length} 個帳戶 · ${summary.as_of}`;
+  // Only shown when the group actually carries debt. With no liability account the two tiles
+  // would read "assets == net" and "liabilities 0" forever, which is three ways of saying one
+  // number -- the same clutter the per-portfolio view avoids by hiding its securities tiles.
+  const hasDebt = Number(summary.liabilities_value) !== 0;
+  elements.cAssetsMetric.hidden = !hasDebt;
+  elements.cLiabilitiesMetric.hidden = !hasDebt;
+  if (hasDebt) {
+    setMoneyValue(elements.cAssets, summary.assets_value, currency);
+    setPnlValue(elements.cLiabilities, summary.liabilities_value, currency);
+    elements.cLiabilitiesDetail.textContent = "已自淨值扣除";
+  }
   setMoneyValue(elements.cSecurities, summary.securities_value, currency);
   setMoneyValue(elements.cCash, summary.cash_value, currency);
   elements.cCashDetail.textContent = summary.cash_by_currency

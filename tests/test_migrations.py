@@ -94,6 +94,38 @@ def test_upgrade_backfills_instrument_ids_for_existing_rows(database_url: str) -
     assert aliases == ["2330.TW", "AAPL"], "legacy rows must get provider alias rows"
 
 
+def test_upgrade_backfills_portfolio_kind_for_existing_rows(database_url: str) -> None:
+    """Every portfolio that predates cash accounts is a securities account, and must say so."""
+    config = alembic_config(database_url)
+    command.upgrade(config, "0008")
+
+    engine = create_sqlite_engine(database_url)
+    now = datetime.now(UTC)
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                "INSERT INTO portfolios (id, name, base_currency, created_at)"
+                " VALUES ('p-legacy', 'Legacy book', 'USD', :now)"
+            ),
+            {"now": now},
+        )
+    engine.dispose()
+
+    command.upgrade(config, "head")
+
+    engine = create_sqlite_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            row = connection.execute(
+                sa.text("SELECT kind, institution FROM portfolios WHERE id = 'p-legacy'")
+            ).one()
+    finally:
+        engine.dispose()
+
+    assert row[0] == "investment", "a pre-existing portfolio is a securities account"
+    assert row[1] is None, "the institution behind an old portfolio is unknown, not invented"
+
+
 def test_migrated_schema_matches_the_orm_models(database_url: str) -> None:
     """Guards the split brain where models.py and alembic/versions drift apart.
 

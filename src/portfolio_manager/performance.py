@@ -21,6 +21,7 @@ from decimal import Decimal, DivisionByZero, InvalidOperation
 from sqlalchemy.orm import Session
 
 from .errors import DomainError
+from .journal import PortfolioKind
 from .models import PortfolioValuationSnapshot
 from .replay import FlowTotals, flows_by_bucket, replay_state
 from .services import ZERO, get_portfolio
@@ -131,6 +132,9 @@ def calculate_performance(
     snapshots = list_snapshots(session, portfolio_id, start_date, end_date)
     coverage = _assess_coverage(session, portfolio_id, snapshots, start_date, end_date)
 
+    if portfolio.kind == PortfolioKind.LIABILITY.value:
+        return _not_measurable(portfolio, start_date, end_date, snapshots, coverage)
+
     if len(snapshots) < 2:
         return _insufficient(portfolio, start_date, end_date, snapshots, coverage)
 
@@ -191,9 +195,13 @@ def _daily_returns(
         flow = flows_between[index]
 
         denominator = start_value + flow * MIDDAY_WEIGHT
-        if denominator == ZERO:
+        if denominator <= ZERO:
             # An empty portfolio that received money has no return to report for that day;
             # calling it zero or infinite would both be inventions.
+            #
+            # A negative base is refused for a sharper reason: the division still succeeds, but
+            # it silently inverts the sign, reporting a recovery as a loss. A wrong number is
+            # worse than a missing one, so a non-positive base yields no return either way.
             results.append(
                 DailyReturn(_date_of(current), start_value, end_value, flow, None)
             )
@@ -408,6 +416,32 @@ def _assess_coverage(
     return coverage
 
 
+def _not_measurable(
+    portfolio,
+    start_date: date,
+    end_date: date,
+    snapshots: list[PortfolioValuationSnapshot],
+    coverage: PerformanceCoverage,
+) -> PerformanceResult:
+    """A loan has no return, because repaying one is not an investment decision.
+
+    Refusing is not a limitation being worked around. A rate of return divides a gain by the
+    capital that earned it, and a liability's balance is what is owed, not capital at work.
+    Feeding it through Modified Dietz gives a negative denominator, which reports a repayment --
+    unambiguously good -- as a negative return. A number that means the opposite of what it says
+    is worse than no number, so this reports the absence and why.
+    """
+    return _no_return(
+        portfolio,
+        start_date,
+        end_date,
+        snapshots,
+        coverage,
+        "A liability account has no rate of return: its balance is debt outstanding rather "
+        "than capital invested, so there is nothing for a return to be measured against.",
+    )
+
+
 def _insufficient(
     portfolio,
     start_date: date,
@@ -420,6 +454,25 @@ def _insufficient(
         f"A return needs a snapshot at both ends of the period; {len(snapshots)} were found. "
         "Build them with rebuild_valuation_snapshots and try again."
     )
+    return _no_return(
+        portfolio,
+        start_date,
+        end_date,
+        snapshots,
+        coverage,
+        "The period does not contain two snapshots to measure between.",
+    )
+
+
+def _no_return(
+    portfolio,
+    start_date: date,
+    end_date: date,
+    snapshots: list[PortfolioValuationSnapshot],
+    coverage: PerformanceCoverage,
+    reason: str,
+) -> PerformanceResult:
+    """A result carrying values but no return, with the reason there is none."""
     only = snapshots[0] if snapshots else None
     return PerformanceResult(
         portfolio_id=portfolio.id,
@@ -436,7 +489,7 @@ def _insufficient(
         twr_percent=None,
         annualized_twr_percent=None,
         xirr_percent=None,
-        xirr_unavailable_reason="The period does not contain two snapshots to measure between.",
+        xirr_unavailable_reason=reason,
         twr_method=TWR_METHOD,
         xirr_method=XIRR_METHOD,
         calculation_version=CALCULATION_VERSION,

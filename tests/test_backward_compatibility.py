@@ -1,8 +1,9 @@
 """The published API and MCP surface must not change without a version bump.
 
-`legacy_api_baseline.json` is a frozen capture of the 32 operations, 67 response models, and 32
-MCP tools published at version 0.3.0. Agents and generated clients are built against that
-contract, so a change here breaks callers that cannot be updated in lockstep.
+`legacy_api_baseline.json` is a frozen capture of the operations, response models, and MCP tools
+published at version 0.2.0 -- 32, 67, and 32 of them respectively at that time. Agents and
+generated clients are built against that contract, so a change here breaks callers that cannot be
+updated in lockstep. Later versions add to the capture; the frozen entries never move.
 
 Adding operations, models, or tools is fine and expected. Changing or removing an existing one is
 not: it needs an explicit version bump, not a passing test suite. Regenerate this baseline only
@@ -26,6 +27,35 @@ price-history cache. Nothing existing moved, so only the version line of the bas
 The tool exists because cached bars are auto-adjusted and a provider silently restates them after
 a split or dividend: rather than expire entries on a guess about when that happened, recording
 such an action warns the operator and this drops the affected symbol on request.
+
+0.5.0 added cash accounts and transfers: five operations, five models, five MCP tools, and one
+change to an existing model. `PortfolioRead` gained `kind` and `institution`, which is the only
+frozen shape that moved. That was a deliberate trade. `list_portfolios` is the documented way to
+discover portfolios, and without `kind` on the response a caller cannot tell a bank account from a
+brokerage account without a second request per portfolio -- a worse contract than the break. Both
+fields carry defaults, so a client that ignores them reads exactly what it read before.
+
+Transfers exist because moving money between two accounts was previously two unlinked events, one
+per portfolio, with nothing recording that they were the same movement. If the second failed the
+money existed in neither account. `transfer_cash` writes both halves in one database transaction,
+and `reverse_transfer` unwinds both; reversing one side alone is now refused. Each half still
+balances on its own in its own currency, so replay, valuation, and performance were unchanged --
+a cross-currency transfer is two single-currency events, not one event holding two currencies,
+because the balance validator nets legs into a single functional currency and an event that
+balances only after conversion is an unbalanced event wearing an exchange rate.
+
+0.6.0 added liability accounts: two operations, one model, two MCP tools, and three fields on
+`ConsolidatedSummaryRead`. The fields are the reason for the bump. `total_value` was always a
+net figure -- every total in that response is a signed sum, so a loan subtracted correctly before
+any of this existed -- but a single net number cannot distinguish 5M in cash from 15M held
+against a 10M loan, and that distinction is the whole point of recording a debt. `assets_value`,
+`liabilities_value`, and `net_value` split the number that was already there rather than
+introducing a second opinion on it: `net_value` is `total_value`, and the three always reconcile.
+
+`PortfolioKind` gained `liability`. That member is not itself frozen -- `PortfolioRead.kind`
+captures a `$ref`, not the enum's contents -- so a client switching on the value sees a new one
+without the baseline noticing. Anything reading `kind` should treat an unrecognized value as a
+book it cannot interpret rather than assuming `investment`.
 """
 
 import asyncio

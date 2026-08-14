@@ -55,6 +55,29 @@ class EventStatus(StrEnum):
     REVERSED = "reversed"
 
 
+class PortfolioKind(StrEnum):
+    """What a book is for.
+
+    Lives here for the same reason `ActionType` does: the API schemas name these values, and the
+    schemas cannot import the service layer that would otherwise own them.
+
+    A cash account is not a different structure -- it is a portfolio that never holds a position.
+    The distinction exists so that posting a security into a bank balance can be rejected, and so
+    a reader can tell a brokerage account from a savings account.
+
+    A liability account is the same book with the sign reversed: a loan, where the balance is
+    what is owed rather than what is held. Nothing about the journal changes -- cash legs already
+    carry a sign and every total is a plain sum -- so the kind exists to say that a negative
+    balance here is the normal state rather than the overdraft the ledger refuses everywhere
+    else, and to keep a debt out of the return figures, since repaying a loan is not an
+    investment decision.
+    """
+
+    INVESTMENT = "investment"
+    CASH = "cash"
+    LIABILITY = "liability"
+
+
 class ActionType(StrEnum):
     """Corporate action vocabulary.
 

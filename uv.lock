@@ -339,7 +339,7 @@ wheels = [
 
 [[package]]
 name = "local-portfolio-manager"
-version = "0.4.0"
+version = "0.6.0"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },

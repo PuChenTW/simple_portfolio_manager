@@ -57,6 +57,22 @@ The ones that don't, and the couplings that are easy to break:
 - **`cache.py` is invisible by design** — a Redis layer wrapping the `MarketProvider` protocol
   that no consumer knows exists. Every failure degrades to the provider; `PORTFOLIO_REDIS_URL`
   unset disables it. Its month-bucketing rules are subtle and documented separately.
+- **`transfers.py` writes two journal events, not one.** An event belongs to exactly one
+  portfolio, so moving cash between two is a linked pair committed in a single transaction. Each
+  half balances in its own currency; a cross-currency transfer never becomes one two-currency
+  event, and the executed rate goes in leg metadata, never `Leg.fx_rate`, which the balance
+  validator multiplies by unconditionally.
+- **A cash account is a `Portfolio` with `kind='cash'`,** not a separate table. The guard that
+  keeps securities out of one lives in `postings.py`, because `corporate_actions.py` posts
+  through `_persist` directly and would bypass a check placed in the API layer. That guard tests
+  set membership, not equality — a new positionless kind must be added to `_POSITIONLESS_KINDS`
+  or it silently gains the right to hold securities.
+- **A loan is `kind='liability'`,** a book whose balance is what is owed. Only there may cash go
+  negative, and `_owes_by_design` in `postings.py` says so — it is a property of the account and
+  is deliberately not merged into `allow_negative_cash`, which is one caller waiving one check.
+  Interest charged is a `fee`; `interest` credits cash and means interest received. Performance
+  returns no TWR or XIRR for one, because a negative base inverts Modified Dietz and reports a
+  repayment as a loss.
 - **Persisted model changes need an Alembic migration** under `alembic/versions/`. The test
   harness builds tables from the ORM while production runs Alembic, so a missing migration passes
   tests and breaks deployment.
@@ -74,7 +90,7 @@ access. Add regression tests for accounting formulas, idempotency, error codes, 
 OpenAPI changes.
 
 `tests/legacy_api_baseline.json` freezes the 32 operations, 67 response models, and 32 MCP tools
-published at version 0.4.0. Adding a new operation, model, or tool is fine. Touching one already
+published at version 0.2.0. Adding a new operation, model, or tool is fine. Touching one already
 in the baseline is not, and the comparison is exact equality rather than containment: adding an
 optional query parameter to an existing operation, or an optional field to an existing model,
 fails `test_backward_compatibility.py` just as removing one does. That is deliberate — it forces

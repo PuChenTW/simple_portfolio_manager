@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from portfolio_manager.api import app, get_market_provider
 from portfolio_manager.db import Base, create_sqlite_engine, get_session
+from portfolio_manager.journal import PortfolioKind
 from portfolio_manager.market import (
     HistoryAdjustment,
     HistoryBar,
@@ -19,6 +20,7 @@ from portfolio_manager.market import (
     MarketSnapshot,
     QuoteSnapshot,
 )
+from portfolio_manager.models import Portfolio
 
 
 def pytest_collection_modifyitems(config, items) -> None:
@@ -167,6 +169,35 @@ class Harness:
     def portfolio(self, name: str = "USD portfolio", currency: str = "USD") -> str:
         response = self.client.post(
             "/api/v1/portfolios", json={"name": name, "base_currency": currency}
+        )
+        assert response.status_code == 201, response.text
+        return response.json()["id"]
+
+    def cash_account(
+        self,
+        name: str = "Bank account",
+        currency: str = "USD",
+        institution: str | None = "Test Bank",
+    ) -> str:
+        """A portfolio marked as a cash account, for tests of the cash-only guardrails."""
+        portfolio_id = self.portfolio(name, currency)
+        with self.session_factory() as session:
+            portfolio = session.get(Portfolio, portfolio_id)
+            portfolio.kind = PortfolioKind.CASH.value
+            portfolio.institution = institution
+            session.commit()
+        return portfolio_id
+
+    def liability_account(
+        self,
+        name: str = "Credit loan",
+        currency: str = "USD",
+        institution: str | None = "Test Bank",
+    ) -> str:
+        """A book whose balance is money owed, so it may run negative."""
+        response = self.client.post(
+            "/api/v1/liability-accounts",
+            json={"name": name, "base_currency": currency, "institution": institution},
         )
         assert response.status_code == 201, response.text
         return response.json()["id"]

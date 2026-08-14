@@ -33,6 +33,7 @@ ERROR_CODES = {
     "currency_mismatch": "The instrument is not quoted in the portfolio's base currency.",
     "empty_group": "A portfolio group needs at least one member.",
     "empty_journal_event": "A journal event must have at least one leg.",
+    "fx_rate_required": "A cross-currency transfer needs the rate actually executed.",
     "idempotency_conflict": "The request_id was reused with different data.",
     "insufficient_cash": "The withdrawal or purchase exceeds available cash.",
     "insufficient_position": "The sale exceeds the quantity currently held.",
@@ -43,7 +44,12 @@ ERROR_CODES = {
     "journal_out_of_balance": "The legs do not net to zero; a position cannot come from nothing.",
     "market_data_unavailable": "No usable quote or history exists, cached or live.",
     "missing_field": "A field this transaction type requires was omitted.",
+    "not_a_securities_account": "This is a cash account; it cannot hold securities.",
     "portfolio_name_exists": "Another portfolio already uses that name.",
+    "reverse_the_transfer_instead": "Reverse the whole transfer so both sides unwind together.",
+    "self_transfer": "The source and destination portfolios are the same.",
+    "transfer_not_found": "No transfer exists with that id.",
+    "unexpected_fx_rate": "Both portfolios share a currency, so there is no rate to apply.",
     "unknown_classification_field": "Not a classifiable field; see portfolio://taxonomy.",
     "unsupported_event_type": "That event type cannot be recorded this way.",
     "validation_error": "The request body failed schema validation.",
@@ -162,6 +168,135 @@ async def delete_portfolio(portfolio_id: str) -> None:
     This cannot be undone. Confirm the portfolio_id via list_portfolios first if unsure.
     """
     await _request("DELETE", f"/api/v1/portfolios/{portfolio_id}")
+
+
+# --- Cash accounts ----------------------------------------------------------
+
+
+@mcp.tool()
+async def create_cash_account(
+    name: str, base_currency: str, institution: str | None = None
+) -> dict[str, Any]:
+    """Open an account that holds cash and never a security: a bank balance or an e-wallet.
+
+    It behaves as a portfolio everywhere else -- same journal, same valuation, same performance --
+    except that any transaction naming a ticker is rejected. Record deposits, withdrawals,
+    interest, and fees with record_transaction. Use transfer_cash to move money to another
+    account you own, never a withdrawal here plus a deposit there.
+    """
+    return await _request(
+        "POST",
+        "/api/v1/cash-accounts",
+        json={"name": name, "base_currency": base_currency, "institution": institution},
+    )
+
+
+@mcp.tool()
+async def list_cash_accounts() -> list[dict[str, Any]]:
+    """List cash-only accounts, to total the liquid assets held outside a broker."""
+    return await _request("GET", "/api/v1/cash-accounts")
+
+
+# --- Liability accounts -----------------------------------------------------
+
+
+@mcp.tool()
+async def create_liability_account(
+    name: str, base_currency: str, institution: str | None = None
+) -> dict[str, Any]:
+    """Open an account for money owed -- a personal loan, a mortgage, a credit line.
+
+    It is a cash account with the sign reversed: the balance is the debt outstanding, so it runs
+    negative and subtracts from every total it appears in. It cannot hold a security.
+
+    Record the drawdown as transfer_cash from this account to wherever the money landed, and each
+    repayment as a transfer back. Interest charged is a fee through record_transaction -- not
+    interest, which credits cash and is for interest received.
+
+    Only the balance and the cash that moves are stored. The rate, the schedule, and the
+    instalments remaining are not, so do not expect any endpoint to compute with them.
+    """
+    return await _request(
+        "POST",
+        "/api/v1/liability-accounts",
+        json={"name": name, "base_currency": base_currency, "institution": institution},
+    )
+
+
+@mcp.tool()
+async def list_liability_accounts() -> list[dict[str, Any]]:
+    """List liability accounts, to total what is owed across lenders.
+
+    Pair this with list_cash_accounts and list_portfolios to answer what someone is actually
+    worth: those hold the assets, this holds the claims against them.
+    """
+    return await _request("GET", "/api/v1/liability-accounts")
+
+
+# --- Transfers --------------------------------------------------------------
+
+
+@mcp.tool()
+async def transfer_cash(
+    from_portfolio_id: str,
+    to_portfolio_id: str,
+    request_id: str,
+    amount: str,
+    fx_rate: str | None = None,
+    occurred_at: str | None = None,
+    source_reference: str | None = None,
+    memo: str | None = None,
+) -> dict[str, Any]:
+    """Move cash between two accounts you own, recording both sides as one indivisible event.
+
+    Always prefer this to a withdrawal in one portfolio plus a deposit in the other. Those are
+    two unlinked events: if the second fails the money exists in neither account, and nothing
+    records that the two were ever the same movement.
+
+    When the two accounts use different currencies, fx_rate is REQUIRED and must be the rate you
+    actually received, expressed as destination units per source unit. This service will not look
+    a rate up: a market rate differs from an executed one, and the gap would enter the ledger as
+    cash that came from nowhere. Passing fx_rate for a same-currency transfer is rejected.
+
+    Undo it with reverse_transfer, never by reversing one half.
+    """
+    return await _request(
+        "POST",
+        "/api/v1/transfers",
+        json={
+            "from_portfolio_id": from_portfolio_id,
+            "to_portfolio_id": to_portfolio_id,
+            "request_id": request_id,
+            "amount": amount,
+            "fx_rate": fx_rate,
+            "occurred_at": occurred_at,
+            "source_reference": source_reference,
+            "memo": memo,
+        },
+    )
+
+
+@mcp.tool()
+async def get_transfer(transfer_id: str) -> dict[str, Any]:
+    """Read both halves of one transfer, including the rate applied between two currencies."""
+    return await _request("GET", f"/api/v1/transfers/{transfer_id}")
+
+
+@mcp.tool()
+async def reverse_transfer(
+    transfer_id: str, request_id: str, memo: str | None = None
+) -> dict[str, Any]:
+    """Unwind both sides of a transfer together, leaving the originals in the journal.
+
+    Refused if the destination already spent the money: move the cash back first rather than
+    overdrawing it. Reversing a single half through reverse_transaction is refused for the same
+    reason -- it would leave the money in neither account or in both.
+    """
+    return await _request(
+        "POST",
+        f"/api/v1/transfers/{transfer_id}/reversal",
+        json={"request_id": request_id, "memo": memo},
+    )
 
 
 @mcp.tool()
@@ -753,7 +888,7 @@ async def create_portfolio_group(
 
 
 @mcp.tool()
-async def list_portfolio_groups() -> dict[str, Any]:
+async def list_portfolio_groups() -> list[dict[str, Any]]:
     """List the portfolio groups that exist, with their reporting currency and members.
 
     Use this to find a group ID before calling `get_consolidated_summary`, rather than asking

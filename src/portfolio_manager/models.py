@@ -33,11 +33,21 @@ class DecimalText(TypeDecorator[Decimal]):
 
 
 class Portfolio(Base):
+    """One isolated, single-currency book.
+
+    `kind` separates a securities account from a plain cash account (a bank balance, an e-wallet).
+    Both are the same structure -- a journal, a cash projection, and snapshots -- because a cash
+    account is simply one that never holds a position. `base_currency` is the cash currency too,
+    which is why `cash_balances` needs no currency of its own.
+    """
+
     __tablename__ = "portfolios"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     base_currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default="investment")
+    institution: Mapped[str | None] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
@@ -184,6 +194,7 @@ class JournalEvent(Base):
         UniqueConstraint("portfolio_id", "request_id", name="uq_journal_request"),
         Index("ix_journal_events_portfolio_occurred", "portfolio_id", "occurred_at"),
         Index("ix_journal_events_type", "portfolio_id", "event_type"),
+        Index("ix_journal_events_transfer", "transfer_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -204,6 +215,13 @@ class JournalEvent(Base):
     reverses_event_id: Mapped[str | None] = mapped_column(
         ForeignKey("journal_events.id", ondelete="RESTRICT")
     )
+    # A transfer is two events, one per portfolio, sharing this id. Deliberately not a foreign
+    # key: the pair spans two portfolios, so a constraint would either block deleting one side or
+    # corrupt the survivor's link. A dangling id is honest -- the counterparty record is gone.
+    transfer_id: Mapped[str | None] = mapped_column(String(36))
+    # 'out' or 'in'. Stored rather than derived because a reversal of the out-side carries an
+    # inflow sign yet is still the out-side of the pair; the cash sign alone cannot say which.
+    transfer_role: Mapped[str | None] = mapped_column(String(10))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 

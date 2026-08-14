@@ -172,6 +172,40 @@ async def test_registered_tools_cover_every_api_operation() -> None:
     assert operations <= tools, f"API operations without an MCP tool: {operations - tools}"
 
 
+async def test_tool_return_annotations_match_the_endpoint_they_wrap() -> None:
+    """A tool annotated `dict` over an endpoint returning a list fails only when called.
+
+    FastMCP derives each tool's output schema from its return annotation, so the mismatch is
+    invisible until an agent calls it and the response is validated against the wrong model --
+    `list_portfolio_groups` shipped that way and failed with a `DictModel` validation error on a
+    perfectly good array. Comparing the two declarations catches it at build time instead.
+    """
+    spec = app.openapi()
+    returns_array = set()
+    for operations in spec["paths"].values():
+        for operation in operations.values():
+            if not isinstance(operation, dict) or "operationId" not in operation:
+                continue
+            responses = operation.get("responses", {})
+            body = responses.get("200") or responses.get("201") or {}
+            schema = body.get("content", {}).get("application/json", {}).get("schema", {})
+            if schema.get("type") == "array":
+                returns_array.add(operation["operationId"])
+
+    mismatched = []
+    for tool in await mcp_server.mcp.list_tools():
+        if tool.name not in returns_array:
+            continue
+        # A list-returning tool is wrapped as {"result": [...]}; a dict-returning one is not.
+        result = (tool.outputSchema or {}).get("properties", {}).get("result", {})
+        if result.get("type") != "array":
+            mismatched.append(tool.name)
+
+    assert not mismatched, (
+        f"tools whose endpoint returns an array but whose annotation does not: {mismatched}"
+    )
+
+
 async def test_instrument_identity_tools_round_trip(mcp_client) -> None:
     profile = await get_instrument_profile("GLD")
     assert profile["classification"]["security_type"]["value"] == "etf"
