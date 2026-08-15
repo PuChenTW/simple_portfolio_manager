@@ -134,3 +134,20 @@ idempotency, stale-quote warnings, and machine-readable errors.
 Pull requests explain behavior changes, list verification commands, note schema migrations or
 API compatibility impact, and include example requests/responses when the OpenAPI contract
 changes.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live as markdown files under `.scratch/<feature-slug>/` in this repo, committed
+alongside the code. See @docs/agents/issue-tracker.md.
+
+### Triage labels
+
+The five canonical triage roles, each label string equal to its name, recorded as a `Status:` line
+in the issue file. See @docs/agents/triage-labels.md.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` and `docs/adr/` at the repo root, both created lazily.
+`docs/ARCHITECTURE.md` carries the reasoning today. See @docs/agents/domain.md.

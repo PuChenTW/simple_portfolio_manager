@@ -11,6 +11,8 @@ __pycache__/
 CLAUDE.local.md
 .temp
 .DS_Store
+.claude
+.agents
 
 # Frontend build output and dependencies. The built dashboard is a build artifact, produced by
 # `bun run build` in frontend/ and baked into the image at Docker build time.
