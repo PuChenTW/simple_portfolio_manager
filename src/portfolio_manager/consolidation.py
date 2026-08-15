@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from .errors import DomainError, not_found
 from .fx import Conversion, FxService, FxUnavailable
+from .identity import resolve_field_for_many
 from .journal import PortfolioKind
 from .market import MarketProvider
 from .models import (
@@ -36,6 +37,7 @@ from .models import (
 )
 from .schemas import utc_now
 from .services import ZERO, get_portfolio
+from .taxonomy import AssetClass, Provenance
 from .valuation import HistoricalPricer
 
 HUNDRED = Decimal("100")
@@ -61,6 +63,11 @@ class ConsolidatedPosition:
     fx_path: list[str]
     fx_as_of: datetime | None
     weight_percent: Decimal | None
+    # The economic exposure behind the holding, not its legal wrapper: an ETF's asset class is
+    # what it holds, which provider metadata never states. Stays `unclassified` until someone
+    # resolves it, so a gap in the allocation view is visible rather than absorbed into equity.
+    asset_class: str = AssetClass.UNCLASSIFIED.value
+    asset_class_provenance: str = Provenance.UNCLASSIFIED.value
     warnings: list[str] = field(default_factory=list)
 
 
@@ -313,6 +320,10 @@ def build_consolidated_summary(
                 unconverted_value += missing.amount
                 unconverted.append(missing)
 
+    # One query for every holding's asset class, not one per row. Applied after the loop because
+    # the instrument ids are only all known once it finishes.
+    _apply_asset_class(session, positions)
+
     before_cash = len(unconverted)
     cash_value, cash_totals = _consolidate_cash(
         fx, cash_local, currency, valuation_date, rates, unconverted
@@ -355,6 +366,27 @@ def build_consolidated_summary(
         calculation_method=CALCULATION_METHOD,
         warnings=warnings,
     )
+
+
+def _apply_asset_class(session: Session, positions: list[ConsolidatedPosition]) -> None:
+    """Fill each row's asset class from the winning classification, in one query.
+
+    A row whose instrument is unknown, or whose asset class nobody has resolved, keeps the
+    `unclassified` default it was constructed with. That is the honest answer: the provider
+    reports an ETF's wrapper, never what it holds, so defaulting a fund to equity here would
+    invent an exposure and make the gap unfixable because nothing would show it exists.
+    """
+    resolved = resolve_field_for_many(
+        session,
+        [row.instrument_id for row in positions if row.instrument_id],
+        field="asset_class",
+    )
+    for row in positions:
+        winner = resolved.get(row.instrument_id) if row.instrument_id else None
+        if winner is None or not winner.value:
+            continue
+        row.asset_class = winner.value
+        row.asset_class_provenance = winner.provenance.value
 
 
 def _consolidate_position(

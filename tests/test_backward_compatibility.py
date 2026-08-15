@@ -56,6 +56,27 @@ introducing a second opinion on it: `net_value` is `total_value`, and the three 
 captures a `$ref`, not the enum's contents -- so a client switching on the value sees a new one
 without the baseline noticing. Anything reading `kind` should treat an unrecognized value as a
 book it cannot interpret rather than assuming `investment`.
+
+0.7.0 added portfolio and group renaming: no frozen shape moved, only the version line.
+
+0.8.0 added `asset_class` and `asset_class_provenance` to `ConsolidatedPositionRead`. Both
+default to `unclassified`, so a client that ignores them reads exactly what it read before, and
+no operation, model count, or tool changed. The bump exists because the assertions compare
+schemas for equality rather than containment -- an addition still has to be a decision.
+
+The fields are on the consolidated summary rather than behind a per-instrument lookup because
+the summary is where every holding is already listed together. Asking "what is this group's
+exposure by asset class" through `get_instrument_profile` costs one request per holding, and the
+answer would still have to be joined client-side against the values the summary just returned.
+`asset_class_provenance` travels with the value for the reason `ClassificationFieldRead` carries
+it: a `derived` equity read off a provider's `quoteType` and a `manual_override` someone
+verified are not equally trustworthy, and a reader that cannot tell them apart cannot know which
+of its numbers rest on a guess the provider made.
+
+The value is deliberately not defaulted to something plausible. A provider reports a fund's
+wrapper, never what it holds, so every ETF arrives `unclassified` -- reading them as equity
+would have made the allocation view look complete while silently misfiling gold and bond funds,
+and nothing downstream could have detected it.
 """
 
 import asyncio

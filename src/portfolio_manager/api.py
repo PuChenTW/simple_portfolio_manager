@@ -310,7 +310,7 @@ AGENT_SKILL_METADATA = {
 
 app = FastAPI(
     title="Local Portfolio Manager",
-    version="0.7.0",
+    version="0.8.0",
     summary="Agent-friendly accounting for cash, stocks, and crypto portfolios",
     description=API_DESCRIPTION,
     openapi_tags=OPENAPI_TAGS,
@@ -2150,6 +2150,8 @@ def get_consolidated_summary(
                 fx_path=row.fx_path,
                 fx_as_of=row.fx_as_of,
                 weight_percent=row.weight_percent,
+                asset_class=row.asset_class,
+                asset_class_provenance=row.asset_class_provenance,
                 warnings=row.warnings,
             )
             for row in summary.positions

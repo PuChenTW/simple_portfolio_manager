@@ -216,6 +216,22 @@ Each bump to `tests/legacy_api_baseline.json` was a deliberate decision, not a r
   `PortfolioKind` also gained `liability`, which the baseline does **not** freeze — it captures a
   `$ref`, not the members — so a client switching on `kind` should treat an unknown value as a
   book it cannot interpret rather than defaulting it to `investment`.
+- **0.7.0** — portfolio and group renaming. No frozen shape moved.
+- **0.8.0** — additive. `asset_class` and `asset_class_provenance` on
+  `ConsolidatedPositionRead`, so a group's exposure can be read by what its holdings *are*
+  rather than only by ticker. Both default to `unclassified`; nothing else moved.
+
+  They sit on the summary because that is where every holding is already listed together —
+  answering the same question through `get_instrument_profile` costs one request per holding and
+  still needs a client-side join against values the summary just returned. The provenance
+  travels with the value because a `derived` equity read off a provider's `quoteType` and a
+  verified `manual_override` are not equally trustworthy, and a reader that cannot tell them
+  apart cannot know which numbers rest on a provider's guess.
+
+  Nothing is defaulted to a plausible exposure. A provider states a fund's wrapper and never its
+  contents, so every ETF arrives `unclassified` and stays that way until someone resolves it;
+  reading them as equity would have made the allocation view look complete while misfiling gold
+  and bond funds where nothing downstream could detect it.
 
 ## Container build ordering
 

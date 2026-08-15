@@ -245,6 +245,16 @@
   "ConsolidatedPositionRead": {
    "description": "One holding in both its own currency and the reporting currency.",
    "properties": {
+    "asset_class": {
+     "$ref": "#/components/schemas/AssetClass",
+     "default": "unclassified",
+     "description": "Economic exposure behind the holding, independent of its legal wrapper. A fund's asset class is what it holds, which provider metadata never states, so an ETF stays `unclassified` until someone resolves it rather than being read as equity."
+    },
+    "asset_class_provenance": {
+     "$ref": "#/components/schemas/Provenance",
+     "default": "unclassified",
+     "description": "Trust rank behind `asset_class`. See `ClassificationFieldRead.provenance`."
+    },
     "average_cost": {
      "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
      "title": "Average Cost",
@@ -7390,5 +7400,5 @@
    "type": "object"
   }
  },
- "version": "0.7.0"
+ "version": "0.8.0"
 }

@@ -64,15 +64,13 @@ def _classification_rows(
     )
 
 
-def resolve_classification(
-    session: Session, instrument_id: str
-) -> tuple[dict[str, ResolvedField], list[str]]:
-    """Pick the highest-ranked provenance per field.
+def _pick_winners(rows: list[InstrumentClassification]) -> dict[str, ResolvedField]:
+    """Reduce one instrument's rows to the highest-ranked provenance per field.
 
     Ties cannot occur: the unique constraint allows one row per (instrument, field, provenance).
     """
     winners: dict[str, ResolvedField] = {}
-    for row in _classification_rows(session, instrument_id):
+    for row in rows:
         provenance = Provenance(row.provenance)
         current = winners.get(row.field)
         if current is not None and (
@@ -88,6 +86,14 @@ def resolve_classification(
             confidence=row.confidence,
             note=row.note,
         )
+    return winners
+
+
+def resolve_classification(
+    session: Session, instrument_id: str
+) -> tuple[dict[str, ResolvedField], list[str]]:
+    """Pick the highest-ranked provenance per field, with the unresolved ones named."""
+    winners = _pick_winners(_classification_rows(session, instrument_id))
 
     warnings: list[str] = []
     for field in sorted(CLASSIFICATION_FIELDS):
@@ -95,6 +101,42 @@ def resolve_classification(
         if resolved is None or resolved.value in (None, "", AssetClass.UNCLASSIFIED.value):
             warnings.append(f"{field} is unclassified")
     return winners, warnings
+
+
+def resolve_field_for_many(
+    session: Session, instrument_ids: list[str], *, field: str
+) -> dict[str, ResolvedField]:
+    """Resolve one classification field for many instruments in a single query.
+
+    A consolidated summary reports every holding at once, so calling `resolve_classification` per
+    row would cost a query per position. The winner rule is shared with the single-instrument
+    path rather than restated, so the two cannot disagree about which provenance wins.
+
+    Instruments with no row for the field are absent from the result: an unresolved field is
+    reported as unclassified by the caller, never defaulted to a plausible value.
+    """
+    unique = {instrument_id for instrument_id in instrument_ids if instrument_id}
+    if not unique:
+        return {}
+
+    rows = session.scalars(
+        select(InstrumentClassification).where(
+            InstrumentClassification.instrument_id.in_(unique),
+            InstrumentClassification.field == field,
+            InstrumentClassification.is_retracted.is_(False),
+        )
+    ).all()
+
+    by_instrument: dict[str, list[InstrumentClassification]] = {}
+    for row in rows:
+        by_instrument.setdefault(row.instrument_id, []).append(row)
+
+    resolved: dict[str, ResolvedField] = {}
+    for instrument_id, instrument_rows in by_instrument.items():
+        winner = _pick_winners(instrument_rows).get(field)
+        if winner is not None:
+            resolved[instrument_id] = winner
+    return resolved
 
 
 def record_classification(

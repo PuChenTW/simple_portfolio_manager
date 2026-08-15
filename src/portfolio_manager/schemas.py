@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_vali
 
 from .journal import ActionType, EventType, FlowClassification, PortfolioKind
 from .market import HistoryAdjustment, HistoryInterval
-from .taxonomy import Provenance
+from .taxonomy import AssetClass, Provenance
 
 PositiveDecimal = Annotated[
     Decimal,
@@ -1229,6 +1229,18 @@ class ConsolidatedPositionRead(ApiModel):
     fx_path: list[str]
     fx_as_of: datetime | None
     weight_percent: Decimal | None
+    asset_class: AssetClass = Field(
+        default=AssetClass.UNCLASSIFIED,
+        description=(
+            "Economic exposure behind the holding, independent of its legal wrapper. A fund's "
+            "asset class is what it holds, which provider metadata never states, so an ETF "
+            "stays `unclassified` until someone resolves it rather than being read as equity."
+        ),
+    )
+    asset_class_provenance: Provenance = Field(
+        default=Provenance.UNCLASSIFIED,
+        description="Trust rank behind `asset_class`. See `ClassificationFieldRead.provenance`.",
+    )
     warnings: list[str]
 
 
