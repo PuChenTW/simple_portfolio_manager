@@ -15,6 +15,22 @@ export function money(value: string | null | undefined, currency: string): strin
   }).format(parsed)
 }
 
+/**
+ * Money for a tight slot (a donut hole, a stat tile): 1.2M rather than 1,234,567. The exact
+ * figure must stay readable elsewhere on screen -- this trades precision for fit.
+ */
+export function compactMoney(value: string | null | undefined, currency: string): string {
+  if (value == null) return '—'
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return '—'
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency,
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  }).format(parsed)
+}
+
 export function percent(value: string | null | undefined, digits = 1): string {
   if (value == null) return '—'
   const parsed = Number(value)

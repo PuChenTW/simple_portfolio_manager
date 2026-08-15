@@ -20,7 +20,12 @@
           <span class="brand__mark" aria-hidden="true">P</span>
           <span>持倉總覽</span>
         </a>
-        <span class="topbar__note">唯讀 · 本機資料</span>
+        <div class="topbar__actions">
+          <span class="topbar__note">唯讀 · 本機資料</span>
+          <!-- Relative, like every other path here: resolves to /v2/ directly and
+               /portfolio/v2/ behind a subpath proxy. -->
+          <a class="topbar__link" href="v2/">前往 v2</a>
+        </div>
       </div>
     </header>
 

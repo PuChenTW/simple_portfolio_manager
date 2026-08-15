@@ -2,6 +2,7 @@
   import { dashboard } from './lib/state.svelte'
   import NetWorth from './lib/components/NetWorth.svelte'
   import Composition from './lib/components/Composition.svelte'
+  import Allocation from './lib/components/Allocation.svelte'
   import Holdings from './lib/components/Holdings.svelte'
   import Accounts from './lib/components/Accounts.svelte'
   import Skeleton from './lib/components/Skeleton.svelte'
@@ -66,6 +67,8 @@
         {/each}
       </ul>
     {/if}
+
+    <Allocation summary={dashboard.summary} />
 
     <div class="grid">
       <Composition summary={dashboard.summary} />

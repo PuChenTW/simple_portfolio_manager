@@ -46,6 +46,19 @@ button, select { font: inherit; }
 .brand { display: inline-flex; align-items: center; gap: 10px; color: inherit; text-decoration: none; font-weight: 700; letter-spacing: .02em; }
 .brand__mark { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; background: #5bc0b5; color: var(--navy); font-size: .85rem; font-weight: 900; }
 .topbar__note { color: #c4d6da; font-size: .875rem; }
+.topbar__actions { display: inline-flex; align-items: center; gap: 16px; }
+.topbar__link {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 14px;
+  border: 1px solid rgba(255, 255, 255, .35);
+  border-radius: 999px;
+  color: #fff;
+  font-size: .875rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+.topbar__link:hover { background: rgba(255, 255, 255, .12); border-color: rgba(255, 255, 255, .6); }
 
 .page-shell { padding: 44px 0 64px; }
 .page-heading, .panel__heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; }
