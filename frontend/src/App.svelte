@@ -1,10 +1,12 @@
 <script lang="ts">
   import { dashboard } from './lib/state.svelte'
+  import { router } from './lib/route.svelte'
   import NetWorth from './lib/components/NetWorth.svelte'
   import Composition from './lib/components/Composition.svelte'
   import Allocation from './lib/components/Allocation.svelte'
   import Holdings from './lib/components/Holdings.svelte'
   import Accounts from './lib/components/Accounts.svelte'
+  import Classification from './lib/components/Classification.svelte'
   import Skeleton from './lib/components/Skeleton.svelte'
 
   dashboard.load()
@@ -13,6 +15,16 @@
     const target = event.currentTarget as HTMLSelectElement
     dashboard.selectGroup(target.value)
   }
+
+  // Distinct instruments, not holdings: one unclassified ticker held in three accounts is one
+  // decision to make, and counting it three times would overstate the work left.
+  const unclassifiedCount = $derived(
+    new Set(
+      (dashboard.summary?.positions ?? [])
+        .filter((p) => p.asset_class === 'unclassified')
+        .map((p) => p.ticker),
+    ).size,
+  )
 </script>
 
 <div class="shell">
@@ -27,20 +39,34 @@
       {/if}
     </div>
 
-    {#if dashboard.groups.length > 1}
-      <label class="switcher">
-        <span class="visually-hidden">Group</span>
-        <select
-          value={dashboard.selectedGroupId}
-          onchange={onSwitch}
-          disabled={dashboard.refreshing}
-        >
-          {#each dashboard.groups as group (group.id)}
-            <option value={group.id}>{group.name}</option>
-          {/each}
-        </select>
-      </label>
-    {/if}
+    <div class="controls">
+      {#if dashboard.groups.length > 1}
+        <label class="switcher">
+          <span class="visually-hidden">Group</span>
+          <select
+            value={dashboard.selectedGroupId}
+            onchange={onSwitch}
+            disabled={dashboard.refreshing}
+          >
+            {#each dashboard.groups as group (group.id)}
+              <option value={group.id}>{group.name}</option>
+            {/each}
+          </select>
+        </label>
+      {/if}
+
+      <nav>
+        <a href={router.href('dashboard')} class:current={router.current === 'dashboard'}>
+          Dashboard
+        </a>
+        <a href={router.href('classify')} class:current={router.current === 'classify'}>
+          Classification
+          <!-- The count is the point of surfacing this in the nav: an unclassified holding is
+               invisible on the dashboard, so nothing else would ever prompt someone to fix it. -->
+          {#if unclassifiedCount}<span class="badge">{unclassifiedCount}</span>{/if}
+        </a>
+      </nav>
+    </div>
   </header>
 
   {#if dashboard.refreshing}
@@ -58,24 +84,28 @@
     </p>
   {:else if dashboard.summary}
     <div class="content" class:stale={dashboard.refreshing}>
-    <NetWorth summary={dashboard.summary} />
+      {#if router.current === 'classify'}
+        <Classification summary={dashboard.summary} onchange={() => dashboard.refresh()} />
+      {:else}
+        <NetWorth summary={dashboard.summary} />
 
-    {#if dashboard.summary.warnings.length}
-      <ul class="warnings">
-        {#each dashboard.summary.warnings as warning (warning)}
-          <li>{warning}</li>
-        {/each}
-      </ul>
-    {/if}
+        {#if dashboard.summary.warnings.length}
+          <ul class="warnings">
+            {#each dashboard.summary.warnings as warning (warning)}
+              <li>{warning}</li>
+            {/each}
+          </ul>
+        {/if}
 
-    <Allocation summary={dashboard.summary} />
+        <Allocation summary={dashboard.summary} />
 
-    <div class="grid">
-      <Composition summary={dashboard.summary} />
-      <Accounts portfolios={dashboard.portfolios} summary={dashboard.summary} />
-    </div>
+        <div class="grid">
+          <Composition summary={dashboard.summary} />
+          <Accounts portfolios={dashboard.portfolios} summary={dashboard.summary} />
+        </div>
 
-      <Holdings summary={dashboard.summary} />
+        <Holdings summary={dashboard.summary} />
+      {/if}
     </div>
   {/if}
 </div>
@@ -115,6 +145,46 @@
     background: var(--surface);
     border: 1px solid var(--border-strong);
     border-radius: var(--radius-sm);
+  }
+
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  nav {
+    display: flex;
+    gap: 4px;
+  }
+
+  nav a {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    font-size: 13px;
+    text-decoration: none;
+    color: var(--text-faint);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+  }
+
+  nav a.current {
+    color: var(--text);
+    background: var(--surface);
+    border-color: var(--border-strong);
+  }
+
+  .badge {
+    padding: 0 6px;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+    background: var(--warning-soft);
+    border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
+    border-radius: 999px;
   }
 
   /* Two columns on desktop; composition and accounts read side by side above the holdings table. */

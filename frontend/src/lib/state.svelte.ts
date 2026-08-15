@@ -80,6 +80,11 @@ export class DashboardState {
     }
   }
 
+  /** Re-read the current group after a mutation elsewhere in the app changed what it reports. */
+  async refresh(): Promise<void> {
+    if (this.selectedGroupId) await this.selectGroup(this.selectedGroupId)
+  }
+
   async selectGroup(groupId: string): Promise<void> {
     this.selectedGroupId = groupId
     rememberGroupId(groupId)

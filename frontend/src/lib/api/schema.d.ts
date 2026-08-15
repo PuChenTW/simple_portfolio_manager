@@ -73,7 +73,18 @@ export interface paths {
         delete: operations["delete_portfolio"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Rename a portfolio or set its institution
+         * @description Change what a portfolio is called, or record who holds it.
+         *
+         *     Renaming is safe at any time: everything recorded points at the portfolio's ID, so no
+         *     position, event, or snapshot is touched. The base currency and kind are deliberately not
+         *     editable -- they are the terms every posted leg was recorded under, and changing one would
+         *     reinterpret history rather than relabel it. Move the money to a new book instead.
+         *
+         *     This works for cash and liability accounts too, which are portfolios of a different kind.
+         */
+        patch: operations["update_portfolio"];
         trace?: never;
     };
     "/api/v1/cash-accounts": {
@@ -778,7 +789,18 @@ export interface paths {
         delete: operations["delete_portfolio_group"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Rename a portfolio group
+         * @description Change what a group is called.
+         *
+         *     A group is only a reporting lens, so its name carries no accounting meaning and a rename
+         *     touches nothing else: membership intervals, the portfolios themselves, and every past
+         *     consolidation are unaffected. The reporting currency is not editable -- stored totals were
+         *     converted into it, so changing it would reinterpret them. Create another group instead.
+         *
+         *     To change which portfolios are in the group, use `update_portfolio_group_members`.
+         */
+        patch: operations["update_portfolio_group"];
         trace?: never;
     };
     "/api/v1/portfolio-groups/{group_id}/members": {
@@ -847,6 +869,12 @@ export interface components {
          * @enum {string}
          */
         ActionType: "cash_dividend" | "interest" | "split" | "reverse_split" | "stock_dividend" | "return_of_capital" | "symbol_change" | "merger" | "spinoff";
+        /**
+         * AssetClass
+         * @description Economic exposure a holding carries, independent of its legal wrapper.
+         * @enum {string}
+         */
+        AssetClass: "equity" | "fixed_income" | "cash" | "cash_equivalent" | "commodity" | "real_estate" | "crypto" | "multi_asset" | "alternative" | "unclassified";
         /**
          * BalanceRead
          * @description Proof that the event's legs net to zero in its functional currency.
@@ -1031,6 +1059,16 @@ export interface components {
             fx_as_of: string | null;
             /** Weight Percent */
             weight_percent: string | null;
+            /**
+             * @description Economic exposure behind the holding, independent of its legal wrapper. A fund's asset class is what it holds, which provider metadata never states, so an ETF stays `unclassified` until someone resolves it rather than being read as equity.
+             * @default unclassified
+             */
+            asset_class: components["schemas"]["AssetClass"];
+            /**
+             * @description Trust rank behind `asset_class`. See `ClassificationFieldRead.provenance`.
+             * @default unclassified
+             */
+            asset_class_provenance: components["schemas"]["Provenance"];
             /** Warnings */
             warnings: string[];
         };
@@ -1490,6 +1528,21 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /**
+         * GroupUpdate
+         * @description Rename a group. The reporting currency is fixed at creation.
+         * @example {
+         *       "name": "Retirement"
+         *     }
+         */
+        GroupUpdate: {
+            /**
+             * Name
+             * @description New group name.
+             * @example Retirement
+             */
+            name: string;
         };
         /**
          * HealthRead
@@ -2130,6 +2183,27 @@ export interface components {
             valuation_as_of: string;
             /** Warnings */
             warnings?: string[];
+        };
+        /**
+         * PortfolioUpdate
+         * @description Change a portfolio's labels. Currency and kind are fixed at creation.
+         * @example {
+         *       "name": "US long term"
+         *     }
+         */
+        PortfolioUpdate: {
+            /**
+             * Name
+             * @description New unique name. Omit to leave the name unchanged.
+             * @example US long term
+             */
+            name?: string | null;
+            /**
+             * Institution
+             * @description Bank or broker holding the account. Omit to leave it unchanged; it cannot be cleared, only replaced.
+             * @example Firstrade
+             */
+            institution?: string | null;
         };
         /**
          * PositionList
@@ -3005,6 +3079,60 @@ export interface operations {
             };
             /** @description `portfolio_not_found`. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Invalid request data or a violated portfolio rule; inspect `code`. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    update_portfolio: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Portfolio UUID returned by `create_portfolio`. */
+                portfolio_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PortfolioUpdate"];
+            };
+        };
+        responses: {
+            /** @description The portfolio with its updated labels */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PortfolioRead"];
+                };
+            };
+            /** @description `portfolio_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `portfolio_name_exists`: another portfolio already has that name. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4395,6 +4523,51 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description `portfolio_group_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Invalid request data or a violated portfolio rule; inspect `code`. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    update_portfolio_group: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Portfolio group UUID returned by `create_portfolio_group`. */
+                group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GroupUpdate"];
+            };
+        };
+        responses: {
+            /** @description The group with its new name and current members */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GroupRead"];
+                };
             };
             /** @description `portfolio_group_not_found`. */
             404: {

@@ -10,6 +10,33 @@ export type UnconvertedAmount = Schemas['UnconvertedAmountRead']
 export type Group = Schemas['GroupRead']
 export type Portfolio = Schemas['PortfolioRead']
 export type PortfolioKind = Schemas['PortfolioKind']
+export type AssetClass = Schemas['AssetClass']
+export type Provenance = Schemas['Provenance']
+export type InstrumentProfile = Schemas['InstrumentProfileRead']
+
+/** Every asset class the API defines, in taxonomy order.
+ *
+ * Listed rather than derived because a TypeScript union is erased at runtime. The compiler still
+ * checks it: `AssetClass[]` fails to build if a member is misspelled, and the exhaustiveness
+ * assertion below fails if the API adds one this list has not caught up with -- so a new taxonomy
+ * member breaks the build rather than silently going missing from the picker.
+ */
+export const ASSET_CLASSES = [
+  'equity',
+  'fixed_income',
+  'cash',
+  'cash_equivalent',
+  'commodity',
+  'real_estate',
+  'crypto',
+  'multi_asset',
+  'alternative',
+  'unclassified',
+] as const satisfies readonly AssetClass[]
+
+// Fails to compile if the API gains an asset class missing from ASSET_CLASSES.
+const _exhaustive: (typeof ASSET_CLASSES)[number] = null as unknown as AssetClass
+void _exhaustive
 
 /** A machine-readable API failure. The envelope is stable, so surface `code` rather than status. */
 export class ApiError extends Error {
@@ -46,6 +73,18 @@ async function get<T>(path: string): Promise<T> {
   return response.json() as Promise<T>
 }
 
+async function put<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(apiUrl(path), {
+    method: 'PUT',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) {
+    throw await toApiError(response)
+  }
+  return response.json() as Promise<T>
+}
+
 async function toApiError(response: Response): Promise<ApiError> {
   const fallback = `Request failed with status ${response.status}`
   try {
@@ -62,4 +101,20 @@ export const api = {
   groupSummary: (groupId: string) =>
     get<ConsolidatedSummary>(`portfolio-groups/${encodeURIComponent(groupId)}/summary`),
   listPortfolios: () => get<Portfolio[]>('portfolios'),
+
+  /** Record a manual asset-class decision, or retract one to restore the provider's view.
+   *
+   * `request_id` is an idempotency key for one logical mutation, so it is generated per call
+   * rather than per instrument: two deliberate edits to the same ticker are two mutations, and
+   * reusing a key would make the second a silent no-op replay of the first.
+   */
+  setAssetClass: (
+    reference: string,
+    body: { value?: AssetClass; reason: string; retract?: boolean },
+  ) =>
+    put<InstrumentProfile>(`instruments/${encodeURIComponent(reference)}/classification`, {
+      request_id: crypto.randomUUID(),
+      field: 'asset_class',
+      ...body,
+    }),
 }
