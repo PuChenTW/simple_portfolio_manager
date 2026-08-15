@@ -1,10 +1,67 @@
 <script lang="ts">
-  import type { ConsolidatedSummary } from '../api/client'
+  import type { AssetClass, ConsolidatedSummary } from '../api/client'
   import { compactMoney, money, percent } from '../format'
 
   let { summary }: { summary: ConsolidatedSummary } = $props()
 
   const currency = $derived(summary.reporting_currency)
+
+  type Mode = 'holding' | 'class'
+  let mode = $state<Mode>('class')
+
+  // Colour follows the entity, never its rank: a slot is pinned to an asset class so switching
+  // groups or classifying a holding cannot repaint the survivors. Cash is a class here even
+  // though the taxonomy reaches it through a portfolio's currency rather than an instrument.
+  //
+  // Every class that can appear gets its own slot, because two exposures sharing one colour is
+  // the one thing a categorical palette must never do. The validated palette carries exactly
+  // eight identity hues, and the taxonomy has nine members -- so rather than invent a ninth
+  // colour, `cash_equivalent` folds into `cash` at the bucketing step below. That fold is
+  // economic, not cosmetic: a cash equivalent is cash for the purpose of reading an allocation,
+  // which is why it is the one pair that can merge without losing a distinction the chart is for.
+  // Keyed by AssetClass rather than string, so a new taxonomy member is a build error here
+  // instead of a holding silently drawn in the "no identity" gray.
+  //
+  // Every member is listed: a class either owns a slot, or names the class it folds into. A new
+  // taxonomy member fails to compile until someone decides which it is, rather than being drawn
+  // silently in the "no identity" gray.
+  const CLASS_SLOT: Record<AssetClass, number | { foldInto: AssetClass }> = {
+    equity: 1,
+    fixed_income: 2,
+    cash: 3,
+    commodity: 4,
+    crypto: 5,
+    real_estate: 6,
+    multi_asset: 7,
+    alternative: 8,
+    cash_equivalent: { foldInto: 'cash' },
+    unclassified: 0, // The de-emphasis gray: a gap is not an identity.
+  }
+
+  /** The slice a class is drawn as, following any fold. */
+  function bucketOf(value: string): AssetClass {
+    const slot = CLASS_SLOT[value as AssetClass]
+    if (slot === undefined) return 'unclassified'
+    return typeof slot === 'object' ? slot.foldInto : (value as AssetClass)
+  }
+
+  function slotOf(key: AssetClass): number {
+    const slot = CLASS_SLOT[key]
+    return typeof slot === 'number' ? slot : 0
+  }
+
+  const CLASS_LABEL: Record<string, string> = {
+    equity: 'Equity',
+    fixed_income: 'Fixed income',
+    cash: 'Cash',
+    cash_equivalent: 'Cash equivalent',
+    commodity: 'Commodity',
+    crypto: 'Crypto',
+    real_estate: 'Real estate',
+    multi_asset: 'Multi-asset',
+    alternative: 'Alternative',
+    unclassified: 'Unclassified',
+  }
 
   // A pie is part-to-whole, so every slice must be a non-negative share of one total. The
   // denominator is `assets_value` -- the balance sheet's asset side. `net_value` is already
@@ -76,26 +133,57 @@
                 value: c.amount,
               }))
 
-    const entries = [
-      ...priced.map((p) => ({
-        key: `${p.portfolio_id}:${p.ticker}`,
-        label: p.ticker,
-        detail: p.portfolio_name,
-        value: Number(p.reporting_market_value),
-      })),
-      ...cashEntries,
-    ].filter((e) => Number.isFinite(e.value) && e.value > 0)
+    const holdingEntries = priced.map((p) => ({
+      key: `${p.portfolio_id}:${p.ticker}`,
+      label: p.ticker,
+      detail: p.portfolio_name,
+      value: Number(p.reporting_market_value),
+    }))
+
+    const entries = [...holdingEntries, ...cashEntries].filter(
+      (e) => Number.isFinite(e.value) && e.value > 0,
+    )
 
     const gross = entries.reduce((sum, e) => sum + e.value, 0)
     if (gross <= 0) return null
 
-    entries.sort((a, b) => b.value - a.value)
+    const holdingCount = entries.length
+
+    // Cash reaches the pie through the portfolio's currency, not through an instrument, so it
+    // has no `asset_class` of its own -- it is folded in under the class it plainly is. Every
+    // cash slice already carries the netting caveat computed above, which the by-class view
+    // inherits unchanged rather than restating.
+    const slices =
+      mode === 'class'
+        ? byClass(priced, cashEntries, gross)
+        : byHolding(entries, gross)
+
+    const unclassifiedValue =
+      slices.find((s) => s.key === 'class:unclassified')?.value ?? 0
+
+    return {
+      slices,
+      gross,
+      holdingCount,
+      debt,
+      // Only worth explaining when a combined cash figure is actually on screen.
+      netted: netted && cashEntries.length > 0,
+      unpricedCount,
+      unclassifiedValue,
+    }
+  })
+
+  type Entry = { key: string; label: string; detail: string; value: number }
+
+  /** Rank-coloured slices, tail folded: the identity that matters is the individual holding. */
+  function byHolding(entries: Entry[], gross: number): Slice[] {
+    const sorted = [...entries].sort((a, b) => b.value - a.value)
 
     // Past six segments a pie stops being readable at a glance, so the tail folds into one
     // de-emphasised bucket. Folding only pays when it removes more than the slice it costs.
-    const fold = entries.length > SLICE_CAP
-    const head = fold ? entries.slice(0, SLICE_CAP - 1) : entries
-    const tail = fold ? entries.slice(SLICE_CAP - 1) : []
+    const fold = sorted.length > SLICE_CAP
+    const head = fold ? sorted.slice(0, SLICE_CAP - 1) : sorted
+    const tail = fold ? sorted.slice(SLICE_CAP - 1) : []
 
     const slices: Slice[] = head.map((e, i) => ({
       ...e,
@@ -114,17 +202,63 @@
         slot: 0, // slot 0 is the de-emphasis gray: "Other" is a remainder, not an identity.
       })
     }
+    return slices
+  }
 
-    return {
-      slices,
-      gross,
-      holdingCount: entries.length,
-      debt,
-      // Only worth explaining when a combined cash figure is actually on screen.
-      netted: netted && cashEntries.length > 0,
-      unpricedCount,
+  /** What a class slice is made of. Cash can hold a balance, cash-equivalent holdings, or both,
+   *  so it says which rather than assuming -- every other class is only ever holdings. */
+  function describe(key: string, tickers: number, hasBalance: boolean): string {
+    const held = `${tickers} holding${tickers === 1 ? '' : 's'}`
+    if (key !== 'cash') return held
+    if (!tickers) return 'Uninvested balance'
+    return hasBalance ? `Balance + ${held}` : held
+  }
+
+  /** Slices by economic exposure. No folding: the taxonomy is already few enough to read. */
+  function byClass(
+    priced: ConsolidatedSummary['positions'],
+    cashEntries: Entry[],
+    gross: number,
+  ): Slice[] {
+    const totals = new Map<AssetClass, { value: number; tickers: Set<string> }>()
+
+    for (const position of priced) {
+      const value = Number(position.reporting_market_value)
+      if (!Number.isFinite(value) || value <= 0) continue
+      const key = bucketOf(position.asset_class)
+      const bucket = totals.get(key) ?? { value: 0, tickers: new Set<string>() }
+      bucket.value += value
+      bucket.tickers.add(position.ticker)
+      totals.set(key, bucket)
     }
-  })
+
+    const cashValue = cashEntries.reduce((sum, e) => sum + e.value, 0)
+    const hasBalance = cashValue > 0
+    if (hasBalance) {
+      const bucket = totals.get('cash') ?? { value: 0, tickers: new Set<string>() }
+      bucket.value += cashValue
+      totals.set('cash', bucket)
+    }
+
+    return [...totals.entries()]
+      .map(([key, bucket]) => ({
+        key: `class:${key}`,
+        label: CLASS_LABEL[key] ?? key.replace(/_/g, ' '),
+        detail: describe(key, bucket.tickers.size, hasBalance),
+        value: bucket.value,
+        share: (bucket.value / gross) * 100,
+        slot: slotOf(key),
+      }))
+      // Largest first, but `unclassified` is pinned last: it is a gap in the reading, not a
+      // category competing with the others for attention.
+      .sort((a, b) =>
+        a.key === 'class:unclassified'
+          ? 1
+          : b.key === 'class:unclassified'
+            ? -1
+            : b.value - a.value,
+      )
+  }
 
   // Geometry. One shared circle description keeps the arcs, the gaps, and the hover ring
   // consistent -- a donut is drawn as a stroked circle so each segment is one dash run.
@@ -155,11 +289,33 @@
 <section class="card">
   <header>
     <h2>Asset allocation</h2>
-    {#if model}
-      <span class="faint">
-        {model.holdingCount} holding{model.holdingCount === 1 ? '' : 's'}
-      </span>
-    {/if}
+
+    <div class="head-right">
+      {#if model}
+        <span class="faint">
+          {model.holdingCount} holding{model.holdingCount === 1 ? '' : 's'}
+        </span>
+      {/if}
+
+      <!-- Two readings of one total, not two charts: the geometry, palette, and legend are
+           shared, so only the grouping changes underfoot. -->
+      <div class="modes" role="group" aria-label="Group allocation by">
+        <button
+          class:on={mode === 'class'}
+          aria-pressed={mode === 'class'}
+          onclick={() => (mode = 'class')}
+        >
+          By type
+        </button>
+        <button
+          class:on={mode === 'holding'}
+          aria-pressed={mode === 'holding'}
+          onclick={() => (mode = 'holding')}
+        >
+          By holding
+        </button>
+      </div>
+    </div>
   </header>
 
   {#if !model}
@@ -167,7 +323,13 @@
   {:else}
     <div class="layout">
       <div class="plot">
-        <svg viewBox="0 0 150 150" role="img" aria-label="Asset allocation by holding">
+        <svg
+          viewBox="0 0 150 150"
+          role="img"
+          aria-label={mode === 'class'
+            ? 'Asset allocation by asset type'
+            : 'Asset allocation by holding'}
+        >
           <g transform="rotate(-90 75 75)">
             {#each arcs as arc (arc.key)}
               <circle
@@ -247,15 +409,30 @@
             converted to {currency} and {model.unpricedCount === 1 ? 'is' : 'are'} excluded.
           </li>
         {/if}
+        <!-- Actionable by construction: the note appears only while a gap exists, names what it
+             is worth, and links to the page that closes it. Once nothing is unclassified it
+             disappears rather than becoming a warning nobody can clear. -->
+        {#if mode === 'class' && model.unclassifiedValue > 0}
+          <li>
+            {money(String(model.unclassifiedValue), currency)} sits in holdings whose asset class
+            nobody has resolved, so it is shown as its own slice rather than assumed.
+            <a href="#/classify">Classify them</a> to see it split.
+          </li>
+        {/if}
       </ul>
   {/if}
 </section>
 
 <style>
   /* Categorical slots, validated with the dataviz palette validator against this dashboard's
-     own surfaces (#ffffff light, #171b21 dark), adjacent pairlist, both modes. Slot 0 is the
-     de-emphasis gray for "Other": a remainder is not an identity, so it deliberately sits
-     below the chroma floor the six identity slots must clear. */
+     own surfaces (#ffffff light, #171b21 dark), adjacent pairlist, both modes. All eight
+     identity slots pass; the three light-mode slots under 3:1 contrast take the relief rule,
+     satisfied by the legend, which carries every slice's name and value as text. Slot 0 is the
+     de-emphasis gray for "Other" and "Unclassified": neither is an identity, so it deliberately
+     sits below the chroma floor the identity slots must clear.
+
+     Eight is the whole palette -- there is no ninth hue to invent, which is why the by-type
+     view folds `cash_equivalent` into `cash` rather than growing this list. */
   .card {
     --slot-1: #2a78d6;
     --slot-2: #eb6834;
@@ -263,6 +440,8 @@
     --slot-4: #eda100;
     --slot-5: #e87ba4;
     --slot-6: #008300;
+    --slot-7: #4a3aa7;
+    --slot-8: #e34948;
     --slot-0: #8a939f;
 
     padding: var(--pad);
@@ -280,6 +459,8 @@
         --slot-4: #c98500;
         --slot-5: #d55181;
         --slot-6: #008300;
+        --slot-7: #9085e9;
+        --slot-8: #e66767;
         --slot-0: #6f7a87;
       }
     }
@@ -289,11 +470,47 @@
     display: flex;
     align-items: baseline;
     justify-content: space-between;
+    gap: 12px;
     margin-bottom: 12px;
+    flex-wrap: wrap;
   }
 
   h2 {
     font-size: 15px;
+  }
+
+  .head-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .modes {
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    background: var(--surface-sunken);
+    border-radius: var(--radius-sm);
+  }
+
+  .modes button {
+    padding: 4px 10px;
+    font: inherit;
+    font-size: 12px;
+    color: var(--text-faint);
+    background: none;
+    border: none;
+    border-radius: calc(var(--radius-sm) - 1px);
+    cursor: pointer;
+  }
+
+  .modes button.on {
+    color: var(--text);
+    background: var(--surface);
+  }
+
+  .notes a {
+    color: inherit;
   }
 
   .layout {
