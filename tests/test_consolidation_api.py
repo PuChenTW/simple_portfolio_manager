@@ -37,6 +37,43 @@ def test_group_round_trip_over_http(harness, group) -> None:
     assert set(body["portfolio_ids"]) == {group["usd"], group["twd"]}
 
 
+def test_renaming_a_group_leaves_its_membership_and_currency_intact(harness, group) -> None:
+    """A group is a reporting lens: its name carries no accounting meaning."""
+    before = harness.client.get(f"/api/v1/portfolio-groups/{group['id']}").json()
+
+    renamed = harness.client.patch(
+        f"/api/v1/portfolio-groups/{group['id']}", json={"name": "Everything (renamed)"}
+    )
+    assert renamed.status_code == 200, renamed.text
+    body = renamed.json()
+    assert body["name"] == "Everything (renamed)"
+    assert body["id"] == group["id"]
+    assert body["reporting_currency"] == "USD", "a rename must not touch the reporting currency"
+    assert set(body["portfolio_ids"]) == {group["usd"], group["twd"]}
+    assert body["created_at"] == before["created_at"]
+    assert body["updated_at"] >= before["updated_at"]
+
+
+def test_two_groups_may_share_a_name(harness, group) -> None:
+    """Group names are not unique, so a rename has no collision to report."""
+    other = harness.client.post(
+        "/api/v1/portfolio-groups",
+        json={"name": "Other", "reporting_currency": "USD", "portfolio_ids": [group["usd"]]},
+    ).json()
+
+    renamed = harness.client.patch(
+        f"/api/v1/portfolio-groups/{other['id']}", json={"name": "Everything"}
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["name"] == "Everything"
+
+
+def test_renaming_a_missing_group_is_reported(harness) -> None:
+    missing = harness.client.patch("/api/v1/portfolio-groups/nope", json={"name": "Anything"})
+    assert missing.status_code == 404
+    assert missing.json()["code"] == "portfolio_group_not_found"
+
+
 def test_consolidated_summary_reports_its_conversions(harness, group) -> None:
     body = harness.client.get(f"/api/v1/portfolio-groups/{group['id']}/summary").json()
 

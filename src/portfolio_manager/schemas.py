@@ -92,6 +92,46 @@ class PortfolioRead(ApiModel):
     created_at: datetime
 
 
+class PortfolioUpdate(ApiModel):
+    """Change a portfolio's labels. Currency and kind are fixed at creation."""
+
+    name: Annotated[
+        str | None,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
+        Field(
+            default=None,
+            description="New unique name. Omit to leave the name unchanged.",
+            examples=["US long term"],
+        ),
+    ] = None
+    institution: Annotated[
+        str | None,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
+        Field(
+            default=None,
+            description=(
+                "Bank or broker holding the account. Omit to leave it unchanged; it cannot be "
+                "cleared, only replaced."
+            ),
+            examples=["Firstrade"],
+        ),
+    ] = None
+
+    model_config = ConfigDict(json_schema_extra={"examples": [{"name": "US long term"}]})
+
+
+class GroupUpdate(ApiModel):
+    """Rename a group. The reporting currency is fixed at creation."""
+
+    name: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
+        Field(description="New group name.", examples=["Retirement"]),
+    ]
+
+    model_config = ConfigDict(json_schema_extra={"examples": [{"name": "Retirement"}]})
+
+
 class CashAccountCreate(ApiModel):
     """Open an account that holds cash and never a position.
 

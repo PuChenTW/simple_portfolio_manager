@@ -162,6 +162,27 @@ async def get_portfolio(portfolio_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+async def update_portfolio(
+    portfolio_id: str, name: str | None = None, institution: str | None = None
+) -> dict[str, Any]:
+    """Rename a portfolio, or record the bank or broker holding it.
+
+    Renaming is safe at any time: every position, event, and snapshot points at the portfolio's
+    ID, so nothing recorded is touched. An omitted argument is left unchanged, and institution
+    can be replaced but not cleared. Works for cash and liability accounts too.
+
+    The base currency and kind cannot be changed -- they are the terms every posted leg was
+    recorded under. To hold a different currency, create another portfolio and transfer to it.
+    """
+    updates = {"name": name, "institution": institution}
+    return await _request(
+        "PATCH",
+        f"/api/v1/portfolios/{portfolio_id}",
+        json={key: value for key, value in updates.items() if value is not None},
+    )
+
+
+@mcp.tool()
 async def delete_portfolio(portfolio_id: str) -> None:
     """Permanently delete a portfolio and all its positions, trades, and cash history.
 
@@ -915,6 +936,20 @@ async def delete_portfolio_group(group_id: str) -> None:
     membership and leaves earlier reports intact.
     """
     await _request("DELETE", f"/api/v1/portfolio-groups/{group_id}")
+
+
+@mcp.tool()
+async def update_portfolio_group(group_id: str, name: str) -> dict[str, Any]:
+    """Rename a portfolio group.
+
+    A group is only a reporting lens, so a rename touches nothing else: membership, the member
+    portfolios, and every past consolidation are unaffected. The reporting currency cannot be
+    changed, because stored totals were converted into it. To change which portfolios belong to
+    the group, use update_portfolio_group_members instead.
+    """
+    return await _request(
+        "PATCH", f"/api/v1/portfolio-groups/{group_id}", json={"name": name}
+    )
 
 
 @mcp.tool()

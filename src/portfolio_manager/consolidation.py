@@ -173,6 +173,21 @@ def create_group(
     return group
 
 
+def rename_group(session: Session, group_id: str, name: str) -> PortfolioGroup:
+    """Retitle a group.
+
+    Only the label moves. `reporting_currency` is fixed at creation: every stored consolidation
+    was converted into it, so changing it would reinterpret those totals rather than rename them.
+    Group names are not unique, so a rename has no collision to report.
+    """
+    group = get_group(session, group_id)
+    group.name = name
+    group.updated_at = utc_now()
+    session.commit()
+    session.refresh(group)
+    return group
+
+
 def replace_members(
     session: Session, group_id: str, portfolio_ids: list[str]
 ) -> PortfolioGroup:

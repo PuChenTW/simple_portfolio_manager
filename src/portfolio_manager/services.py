@@ -40,6 +40,7 @@ from .schemas import (
     PortfolioCreate,
     PortfolioRead,
     PortfolioSummary,
+    PortfolioUpdate,
     PositionRead,
     QuoteRead,
     TechnicalSnapshotRead,
@@ -121,6 +122,33 @@ def _create_book(
             "A portfolio with this name already exists",
             {"name": name},
         ) from exc
+    return portfolio
+
+
+def update_portfolio(session: Session, portfolio_id: str, data: PortfolioUpdate) -> Portfolio:
+    """Rename a book, or record which institution holds it.
+
+    Only the labels move. `base_currency` and `kind` are fixed at creation because every posted
+    leg, cash projection, and snapshot was recorded under them -- changing either would restate
+    history rather than relabel it. An omitted field is left alone, so a rename cannot blank an
+    institution the caller never mentioned.
+    """
+    portfolio = get_portfolio(session, portfolio_id)
+    if data.name is not None:
+        portfolio.name = data.name
+    if data.institution is not None:
+        portfolio.institution = data.institution
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise DomainError(
+            409,
+            "portfolio_name_exists",
+            "A portfolio with this name already exists",
+            {"name": data.name},
+        ) from exc
+    session.refresh(portfolio)
     return portfolio
 
 

@@ -26,6 +26,60 @@ def test_health_and_portfolios_are_isolated(harness) -> None:
     assert duplicate.json()["code"] == "portfolio_name_exists"
 
 
+def test_rename_portfolio_keeps_its_id_and_recorded_history(harness) -> None:
+    """A rename relabels the book; everything recorded points at the ID and must survive it."""
+    portfolio_id = harness.portfolio()
+    harness.client.post(
+        f"/api/v1/portfolios/{portfolio_id}/transactions",
+        json={"request_id": "d-1", "transaction_type": "deposit", "amount": "10000"},
+    )
+
+    renamed = harness.client.patch(
+        f"/api/v1/portfolios/{portfolio_id}", json={"name": "Renamed portfolio"}
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["id"] == portfolio_id
+    assert renamed.json()["name"] == "Renamed portfolio"
+
+    summary = harness.client.get(f"/api/v1/portfolios/{portfolio_id}/summary").json()
+    assert Decimal(summary["cash_value"]) == Decimal("10000")
+    assert summary["portfolio"]["name"] == "Renamed portfolio"
+
+
+def test_rename_portfolio_refuses_a_name_another_portfolio_holds(harness) -> None:
+    first = harness.portfolio()
+    second = harness.portfolio("Taiwan", "TWD")
+
+    clash = harness.client.patch(f"/api/v1/portfolios/{second}", json={"name": "USD portfolio"})
+    assert clash.status_code == 409
+    assert clash.json()["code"] == "portfolio_name_exists"
+    assert harness.client.get(f"/api/v1/portfolios/{first}").json()["name"] == "USD portfolio"
+    assert harness.client.get(f"/api/v1/portfolios/{second}").json()["name"] == "Taiwan"
+
+
+def test_updating_one_portfolio_label_leaves_the_other_alone(harness) -> None:
+    """An omitted field means "unchanged" -- a rename must not blank a recorded institution."""
+    account_id = harness.cash_account("Savings", "USD", "Test Bank")
+
+    renamed = harness.client.patch(
+        f"/api/v1/portfolios/{account_id}", json={"name": "Emergency fund"}
+    ).json()
+    assert renamed["institution"] == "Test Bank"
+    assert renamed["kind"] == "cash", "a rename must not change what kind of book this is"
+
+    moved = harness.client.patch(
+        f"/api/v1/portfolios/{account_id}", json={"institution": "Other Bank"}
+    ).json()
+    assert moved["name"] == "Emergency fund"
+    assert moved["institution"] == "Other Bank"
+
+
+def test_rename_portfolio_reports_a_missing_id(harness) -> None:
+    missing = harness.client.patch("/api/v1/portfolios/nope", json={"name": "Anything"})
+    assert missing.status_code == 404
+    assert missing.json()["code"] == "portfolio_not_found"
+
+
 def test_delete_portfolio_cascades_and_is_idempotent_on_missing_id(harness) -> None:
     portfolio_id = harness.portfolio()
     harness.client.post(

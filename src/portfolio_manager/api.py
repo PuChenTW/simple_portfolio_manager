@@ -19,6 +19,7 @@ from .consolidation import (
     delete_group,
     get_group,
     member_portfolio_ids,
+    rename_group,
     replace_members,
 )
 from .corporate_actions import (
@@ -74,6 +75,7 @@ from .schemas import (
     GroupCreate,
     GroupMembersUpdate,
     GroupRead,
+    GroupUpdate,
     HealthRead,
     HistoryBarRead,
     HistoryRead,
@@ -92,6 +94,7 @@ from .schemas import (
     PortfolioCreate,
     PortfolioRead,
     PortfolioSummary,
+    PortfolioUpdate,
     PositionList,
     PositionSnapshotRead,
     RebuildRead,
@@ -123,6 +126,7 @@ from .services import (
     market_response,
     normalize_tag,
     replace_tags,
+    update_portfolio,
 )
 from .transfers import events_of, reverse_transfer, transfer_cash
 from .valuation import (
@@ -306,7 +310,7 @@ AGENT_SKILL_METADATA = {
 
 app = FastAPI(
     title="Local Portfolio Manager",
-    version="0.6.0",
+    version="0.7.0",
     summary="Agent-friendly accounting for cash, stocks, and crypto portfolios",
     description=API_DESCRIPTION,
     openapi_tags=OPENAPI_TAGS,
@@ -492,6 +496,37 @@ def list_portfolios(session: SessionDep) -> list[Portfolio]:
 def read_portfolio(portfolio_id: PortfolioId, session: SessionDep) -> Portfolio:
     """Read the currency invariant before selecting a ticker for a trade."""
     return get_portfolio(session, portfolio_id)
+
+
+@app.patch(
+    "/api/v1/portfolios/{portfolio_id}",
+    response_model=PortfolioRead,
+    operation_id="update_portfolio",
+    summary="Rename a portfolio or set its institution",
+    response_description="The portfolio with its updated labels",
+    responses={
+        404: {"model": ErrorResponse, "description": "`portfolio_not_found`."},
+        409: {
+            "model": ErrorResponse,
+            "description": "`portfolio_name_exists`: another portfolio already has that name.",
+        },
+    },
+    tags=["portfolios"],
+)
+def patch_portfolio(
+    portfolio_id: PortfolioId, data: PortfolioUpdate, session: SessionDep
+) -> Portfolio:
+    """
+    Change what a portfolio is called, or record who holds it.
+
+    Renaming is safe at any time: everything recorded points at the portfolio's ID, so no
+    position, event, or snapshot is touched. The base currency and kind are deliberately not
+    editable -- they are the terms every posted leg was recorded under, and changing one would
+    reinterpret history rather than relabel it. Move the money to a new book instead.
+
+    This works for cash and liability accounts too, which are portfolios of a different kind.
+    """
+    return update_portfolio(session, portfolio_id, data)
 
 
 @app.delete(
@@ -1982,6 +2017,32 @@ def list_portfolio_groups(session: SessionDep) -> list[GroupRead]:
 def read_portfolio_group(group_id: GroupId, session: SessionDep) -> GroupRead:
     """Read a group's metadata and the portfolios that are members today."""
     return _group_payload(session, get_group(session, group_id))
+
+
+@app.patch(
+    "/api/v1/portfolio-groups/{group_id}",
+    response_model=GroupRead,
+    operation_id="update_portfolio_group",
+    summary="Rename a portfolio group",
+    response_description="The group with its new name and current members",
+    responses={404: {"model": ErrorResponse, "description": "`portfolio_group_not_found`."}},
+    tags=["consolidation"],
+)
+def patch_portfolio_group(
+    group_id: GroupId, data: GroupUpdate, session: SessionDep
+) -> GroupRead:
+    """
+    Change what a group is called.
+
+    A group is only a reporting lens, so its name carries no accounting meaning and a rename
+    touches nothing else: membership intervals, the portfolios themselves, and every past
+    consolidation are unaffected. The reporting currency is not editable -- stored totals were
+    converted into it, so changing it would reinterpret them. Create another group instead.
+
+    To change which portfolios are in the group, use `update_portfolio_group_members`.
+    """
+    group = rename_group(session, group_id, data.name)
+    return _group_payload(session, group)
 
 
 @app.delete(
