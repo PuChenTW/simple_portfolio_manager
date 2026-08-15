@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ConsolidatedSummary, Portfolio, PortfolioKind } from '../api/client'
+  import { router } from '../route.svelte'
 
   let {
     portfolios,
@@ -37,7 +38,9 @@
     <ul>
       {#each section.items as p (p.id)}
         <li class:outside={!memberIds.has(p.id)}>
-          <span class="name">{p.name}</span>
+          <!-- The whole row is the link: an account name is the natural way into its own page,
+               and a separate affordance would be one more thing to find. -->
+          <a class="name" href={router.account(p.id)}>{p.name}</a>
           <span class="meta faint">
             {p.base_currency}{p.institution ? ` · ${p.institution}` : ''}
           </span>
@@ -103,6 +106,19 @@
 
   .name {
     font-weight: 500;
+    color: var(--text);
+    text-decoration: none;
+  }
+
+  .name:hover {
+    color: var(--accent);
+    text-decoration: underline;
+  }
+
+  .name:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 2px;
   }
 
   .meta {
@@ -112,6 +128,10 @@
   .outside .name {
     color: var(--text-muted);
     font-weight: 400;
+  }
+
+  .outside .name:hover {
+    color: var(--accent);
   }
 
   .tag {

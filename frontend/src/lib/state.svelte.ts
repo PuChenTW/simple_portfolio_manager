@@ -85,6 +85,19 @@ export class DashboardState {
     if (this.selectedGroupId) await this.selectGroup(this.selectedGroupId)
   }
 
+  /** Re-read the portfolio list too, for a mutation that renamed or removed an account.
+   *
+   * `refresh` re-reads only the summary, which would leave the Accounts card showing a name that
+   * no longer exists -- or a deleted account still listed. */
+  async reload(): Promise<void> {
+    try {
+      this.portfolios = await api.listPortfolios()
+    } catch {
+      /* The list is stale, not wrong; the summary below is the number that matters. */
+    }
+    await this.refresh()
+  }
+
   async selectGroup(groupId: string): Promise<void> {
     this.selectedGroupId = groupId
     rememberGroupId(groupId)

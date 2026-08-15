@@ -450,6 +450,8 @@
     border-radius: var(--radius);
   }
 
+  /* Applied from two rules for the same reason as the palette in app.css: the system preference
+     with no explicit choice, and an explicit choice of dark. */
   :root:not([data-theme='light']) {
     @media (prefers-color-scheme: dark) {
       .card {
@@ -464,6 +466,18 @@
         --slot-0: #6f7a87;
       }
     }
+  }
+
+  :root[data-theme='dark'] .card {
+    --slot-1: #3987e5;
+    --slot-2: #d95926;
+    --slot-3: #199e70;
+    --slot-4: #c98500;
+    --slot-5: #d55181;
+    --slot-6: #008300;
+    --slot-7: #9085e9;
+    --slot-8: #e66767;
+    --slot-0: #6f7a87;
   }
 
   header {

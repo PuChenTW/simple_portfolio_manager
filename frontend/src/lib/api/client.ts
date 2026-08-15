@@ -13,6 +13,14 @@ export type PortfolioKind = Schemas['PortfolioKind']
 export type AssetClass = Schemas['AssetClass']
 export type Provenance = Schemas['Provenance']
 export type InstrumentProfile = Schemas['InstrumentProfileRead']
+export type PortfolioSummary = Schemas['PortfolioSummary']
+export type Position = Schemas['PositionRead']
+export type JournalEventPage = Schemas['JournalEventPage']
+export type JournalEvent = Schemas['JournalEventRead']
+export type JournalLeg = Schemas['JournalLegRead']
+export type Performance = Schemas['PerformanceRead']
+export type NavHistory = Schemas['NavHistoryRead']
+export type SnapshotSummary = Schemas['SnapshotSummary']
 
 /** Every asset class the API defines, in taxonomy order.
  *
@@ -85,6 +93,36 @@ async function put<T>(path: string, body: unknown): Promise<T> {
   return response.json() as Promise<T>
 }
 
+async function patch<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(apiUrl(path), {
+    method: 'PATCH',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) {
+    throw await toApiError(response)
+  }
+  return response.json() as Promise<T>
+}
+
+/** DELETE returns 204 with no body, so there is nothing to parse on success. */
+async function del(path: string): Promise<void> {
+  const response = await fetch(apiUrl(path), { method: 'DELETE', headers: { accept: '*/*' } })
+  if (!response.ok) {
+    throw await toApiError(response)
+  }
+}
+
+/** Query string from defined values only, so an omitted option never becomes `undefined`. */
+function query(params: Record<string, string | number | boolean | undefined>): string {
+  const search = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined) search.set(key, String(value))
+  }
+  const encoded = search.toString()
+  return encoded ? `?${encoded}` : ''
+}
+
 async function toApiError(response: Response): Promise<ApiError> {
   const fallback = `Request failed with status ${response.status}`
   try {
@@ -101,6 +139,54 @@ export const api = {
   groupSummary: (groupId: string) =>
     get<ConsolidatedSummary>(`portfolio-groups/${encodeURIComponent(groupId)}/summary`),
   listPortfolios: () => get<Portfolio[]>('portfolios'),
+
+  // --- One account -----------------------------------------------------------------------
+  //
+  // The consolidated summary reports a group in one reporting currency. These read a single
+  // portfolio in *its own* base currency, which is why an account page cannot be assembled by
+  // filtering the group summary: the per-holding cost basis, P&L, and tags it shows are not on
+  // ConsolidatedPositionRead at all, and its values would carry a converted currency.
+
+  portfolio: (portfolioId: string) =>
+    get<Portfolio>(`portfolios/${encodeURIComponent(portfolioId)}`),
+
+  portfolioSummary: (portfolioId: string) =>
+    get<PortfolioSummary>(`portfolios/${encodeURIComponent(portfolioId)}/summary`),
+
+  journalEvents: (
+    portfolioId: string,
+    options: { offset?: number; limit?: number; eventType?: string } = {},
+  ) =>
+    get<JournalEventPage>(
+      `portfolios/${encodeURIComponent(portfolioId)}/transactions` +
+        query({
+          offset: options.offset,
+          limit: options.limit,
+          event_type: options.eventType,
+          // One request per page rather than one per row. See API version history 0.3.0.
+          include_legs: true,
+        }),
+    ),
+
+  performance: (portfolioId: string, startDate: string, endDate: string) =>
+    get<Performance>(
+      `portfolios/${encodeURIComponent(portfolioId)}/performance` +
+        query({ start_date: startDate, end_date: endDate }),
+    ),
+
+  navHistory: (portfolioId: string, startDate: string, endDate: string) =>
+    get<NavHistory>(
+      `portfolios/${encodeURIComponent(portfolioId)}/nav-history` +
+        query({ start_date: startDate, end_date: endDate }),
+    ),
+
+  /** Rename an account or record who holds it. Currency and kind are fixed at creation. */
+  updatePortfolio: (portfolioId: string, body: { name?: string; institution?: string }) =>
+    patch<Portfolio>(`portfolios/${encodeURIComponent(portfolioId)}`, body),
+
+  /** Cascade-deletes every position, event, and snapshot. There is no undo. */
+  deletePortfolio: (portfolioId: string) =>
+    del(`portfolios/${encodeURIComponent(portfolioId)}`),
 
   /** Record a manual asset-class decision, or retract one to restore the provider's view.
    *

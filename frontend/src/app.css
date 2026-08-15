@@ -24,6 +24,10 @@
   color-scheme: light dark;
 }
 
+/* Dark has two causes, so the palette is applied from two rules: the system preference with no
+   explicit choice made, and an explicit choice of dark that must win on a light-preference
+   machine. The light palette above stays on bare `:root` so every token has a definition
+   regardless of which way the reader toggled. */
 :root:not([data-theme='light']) {
   @media (prefers-color-scheme: dark) {
     --bg: #0f1216;
@@ -41,6 +45,24 @@
     --warning: #e0a548;
     --warning-soft: #2c2413;
   }
+}
+
+/* An explicit choice of dark, which must win on a light-preference machine. */
+:root[data-theme='dark'] {
+  --bg: #0f1216;
+  --surface: #171b21;
+  --surface-sunken: #1e242c;
+  --border: #2a313a;
+  --border-strong: #3a434e;
+  --text: #e8ecf1;
+  --text-muted: #9aa5b1;
+  --text-faint: #6f7a87;
+  --accent: #7ea2f5;
+  --accent-soft: #1c2740;
+  --positive: #4cc38a;
+  --negative: #f0656f;
+  --warning: #e0a548;
+  --warning-soft: #2c2413;
 }
 
 * {

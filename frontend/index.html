@@ -8,6 +8,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
     <title>Portfolio</title>
+    <script>
+      // Inline and blocking, deliberately. A stored dark choice applied from the app bundle
+      // would land after the first paint, so the reader sees a white flash on every load.
+      // Reading one key is cheap enough to pay for before the page renders.
+      try {
+        var stored = localStorage.getItem('portfolio.theme')
+        if (stored === 'light' || stored === 'dark')
+          document.documentElement.setAttribute('data-theme', stored)
+      } catch (e) {
+        /* Blocked storage: fall through to following the system preference. */
+      }
+    </script>
   </head>
   <body>
     <div id="app"></div>

@@ -7,6 +7,8 @@
   import Holdings from './lib/components/Holdings.svelte'
   import Accounts from './lib/components/Accounts.svelte'
   import Classification from './lib/components/Classification.svelte'
+  import AccountPage from './lib/components/account/AccountPage.svelte'
+  import ThemeToggle from './lib/components/ThemeToggle.svelte'
   import Skeleton from './lib/components/Skeleton.svelte'
 
   dashboard.load()
@@ -28,53 +30,69 @@
 </script>
 
 <div class="shell">
-  <header class="topbar">
-    <div>
-      <h1>{dashboard.selectedGroup?.name ?? 'Portfolio'}</h1>
-      {#if dashboard.summary}
-        <p class="faint sub">
-          {dashboard.summary.portfolio_ids.length} accounts · reporting in
-          {dashboard.summary.reporting_currency}
-        </p>
-      {/if}
-    </div>
+  <!-- The account page carries its own heading and breadcrumb. Repeating the group header above
+       it would name a group whose numbers are not the ones on screen, and the switcher would
+       imply it changes a single account's figures, which it does not. -->
+  {#if router.name !== 'account'}
+    <header class="topbar">
+      <div>
+        <h1>{dashboard.selectedGroup?.name ?? 'Portfolio'}</h1>
+        {#if dashboard.summary}
+          <p class="faint sub">
+            {dashboard.summary.portfolio_ids.length} accounts · reporting in
+            {dashboard.summary.reporting_currency}
+          </p>
+        {/if}
+      </div>
 
-    <div class="controls">
-      {#if dashboard.groups.length > 1}
-        <label class="switcher">
-          <span class="visually-hidden">Group</span>
-          <select
-            value={dashboard.selectedGroupId}
-            onchange={onSwitch}
-            disabled={dashboard.refreshing}
-          >
-            {#each dashboard.groups as group (group.id)}
-              <option value={group.id}>{group.name}</option>
-            {/each}
-          </select>
-        </label>
-      {/if}
+      <div class="controls">
+        {#if dashboard.groups.length > 1}
+          <label class="switcher">
+            <span class="visually-hidden">Group</span>
+            <select
+              value={dashboard.selectedGroupId}
+              onchange={onSwitch}
+              disabled={dashboard.refreshing}
+            >
+              {#each dashboard.groups as group (group.id)}
+                <option value={group.id}>{group.name}</option>
+              {/each}
+            </select>
+          </label>
+        {/if}
 
-      <nav>
-        <a href={router.href('dashboard')} class:current={router.current === 'dashboard'}>
-          Dashboard
-        </a>
-        <a href={router.href('classify')} class:current={router.current === 'classify'}>
-          Classification
-          <!-- The count is the point of surfacing this in the nav: an unclassified holding is
-               invisible on the dashboard, so nothing else would ever prompt someone to fix it. -->
-          {#if unclassifiedCount}<span class="badge">{unclassifiedCount}</span>{/if}
-        </a>
-      </nav>
-    </div>
-  </header>
+        <nav>
+          <a href={router.dashboard()} class:current={router.name === 'dashboard'}>
+            Dashboard
+          </a>
+          <a href={router.classify()} class:current={router.name === 'classify'}>
+            Classification
+            <!-- The count is the point of surfacing this in the nav: an unclassified holding is
+                 invisible on the dashboard, so nothing else would ever prompt someone to fix it. -->
+            {#if unclassifiedCount}<span class="badge">{unclassifiedCount}</span>{/if}
+          </a>
+        </nav>
+
+        <ThemeToggle />
+      </div>
+    </header>
+  {/if}
 
   {#if dashboard.refreshing}
     <!-- Indeterminate by necessity: the summary is one request that reports no progress. -->
     <div class="progress" role="progressbar" aria-label="Loading group"></div>
   {/if}
 
-  {#if dashboard.loading}
+  <!-- An account reads its own endpoints, so it must not wait on the group summary or be
+       blocked by "no groups yet" -- an account can exist before it belongs to any group. -->
+  {#if router.route.name === 'account'}
+    <AccountPage
+      portfolioId={router.route.id}
+      tab={router.route.tab}
+      groupName={dashboard.selectedGroup?.name ?? null}
+      onchange={() => dashboard.reload()}
+    />
+  {:else if dashboard.loading}
     <Skeleton elapsed={dashboard.elapsed} />
   {:else if dashboard.error}
     <p class="state error">{dashboard.error}</p>
@@ -84,7 +102,7 @@
     </p>
   {:else if dashboard.summary}
     <div class="content" class:stale={dashboard.refreshing}>
-      {#if router.current === 'classify'}
+      {#if router.name === 'classify'}
         <Classification summary={dashboard.summary} onchange={() => dashboard.refresh()} />
       {:else}
         <NetWorth summary={dashboard.summary} />
