@@ -6,7 +6,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -73,6 +73,48 @@ def get_portfolio(session: Session, portfolio_id: str) -> Portfolio:
     if portfolio is None:
         raise not_found("portfolio", portfolio_id)
     return portfolio
+
+
+def _first_event_dates(session: Session, portfolio_ids: list[str]) -> dict[str, date]:
+    """Earliest event date per portfolio, for the whole page in one query.
+
+    A per-row `MIN` would make listing cost a query per portfolio, which is the same N+1 that
+    `legs_for_events` and `reversed_types_for` exist to avoid. The
+    `ix_journal_events_portfolio_occurred` index covers this grouping. Portfolios with no events
+    are absent from the result rather than mapped to a placeholder date -- the caller reports
+    them as null.
+    """
+    if not portfolio_ids:
+        return {}
+    rows = session.execute(
+        select(JournalEvent.portfolio_id, func.min(JournalEvent.occurred_at))
+        .where(JournalEvent.portfolio_id.in_(portfolio_ids))
+        .group_by(JournalEvent.portfolio_id)
+    ).all()
+    return {portfolio_id: _aware(earliest).date() for portfolio_id, earliest in rows}
+
+
+def portfolio_payload(session: Session, portfolio: Portfolio) -> PortfolioRead:
+    """Serialize one portfolio, resolving where its history starts."""
+    return _portfolio_payload(portfolio, _first_event_dates(session, [portfolio.id]))
+
+
+def portfolio_payloads(session: Session, portfolios: list[Portfolio]) -> list[PortfolioRead]:
+    """Serialize a list, resolving every portfolio's first event date in one query."""
+    dates = _first_event_dates(session, [portfolio.id for portfolio in portfolios])
+    return [_portfolio_payload(portfolio, dates) for portfolio in portfolios]
+
+
+def _portfolio_payload(portfolio: Portfolio, dates: dict[str, date]) -> PortfolioRead:
+    return PortfolioRead(
+        id=portfolio.id,
+        name=portfolio.name,
+        base_currency=portfolio.base_currency,
+        kind=PortfolioKind(portfolio.kind),
+        institution=portfolio.institution,
+        first_event_date=dates.get(portfolio.id),
+        created_at=portfolio.created_at,
+    )
 
 
 def create_portfolio(session: Session, data: PortfolioCreate) -> Portfolio:

@@ -125,6 +125,8 @@ from .services import (
     get_portfolio,
     market_response,
     normalize_tag,
+    portfolio_payload,
+    portfolio_payloads,
     replace_tags,
     update_portfolio,
 )
@@ -310,7 +312,7 @@ AGENT_SKILL_METADATA = {
 
 app = FastAPI(
     title="Local Portfolio Manager",
-    version="0.8.0",
+    version="0.9.0",
     summary="Agent-friendly accounting for cash, stocks, and crypto portfolios",
     description=API_DESCRIPTION,
     openapi_tags=OPENAPI_TAGS,
@@ -429,14 +431,14 @@ def health(session: SessionDep) -> HealthRead:
     },
     tags=["portfolios"],
 )
-def add_portfolio(data: PortfolioCreate, session: SessionDep) -> Portfolio:
+def add_portfolio(data: PortfolioCreate, session: SessionDep) -> PortfolioRead:
     """
     Create the isolation boundary for positions, cash, trades, and tags.
 
     Choose `USD` for US stocks and `*-USD` crypto, or `TWD` for `.TW`/`.TWO` stocks. The
     currency cannot be mixed later, so create another portfolio for a different currency.
     """
-    return create_portfolio(session, data)
+    return portfolio_payload(session, create_portfolio(session, data))
 
 
 @app.get(
@@ -447,9 +449,10 @@ def add_portfolio(data: PortfolioCreate, session: SessionDep) -> Portfolio:
     response_description="Portfolios ordered by creation time",
     tags=["portfolios"],
 )
-def list_portfolios(session: SessionDep) -> list[Portfolio]:
+def list_portfolios(session: SessionDep) -> list[PortfolioRead]:
     """Use this to discover portfolio IDs instead of guessing or creating duplicates."""
-    return list(session.scalars(select(Portfolio).order_by(Portfolio.created_at)).all())
+    portfolios = list(session.scalars(select(Portfolio).order_by(Portfolio.created_at)).all())
+    return portfolio_payloads(session, portfolios)
 
 
 @app.get(
@@ -461,9 +464,9 @@ def list_portfolios(session: SessionDep) -> list[Portfolio]:
     responses={404: {"model": ErrorResponse, "description": "`portfolio_not_found`."}},
     tags=["portfolios"],
 )
-def read_portfolio(portfolio_id: PortfolioId, session: SessionDep) -> Portfolio:
+def read_portfolio(portfolio_id: PortfolioId, session: SessionDep) -> PortfolioRead:
     """Read the currency invariant before selecting a ticker for a trade."""
-    return get_portfolio(session, portfolio_id)
+    return portfolio_payload(session, get_portfolio(session, portfolio_id))
 
 
 @app.patch(
@@ -483,7 +486,7 @@ def read_portfolio(portfolio_id: PortfolioId, session: SessionDep) -> Portfolio:
 )
 def patch_portfolio(
     portfolio_id: PortfolioId, data: PortfolioUpdate, session: SessionDep
-) -> Portfolio:
+) -> PortfolioRead:
     """
     Change what a portfolio is called, or record who holds it.
 
@@ -494,7 +497,7 @@ def patch_portfolio(
 
     This works for cash and liability accounts too, which are portfolios of a different kind.
     """
-    return update_portfolio(session, portfolio_id, data)
+    return portfolio_payload(session, update_portfolio(session, portfolio_id, data))
 
 
 @app.delete(
@@ -531,7 +534,7 @@ def remove_portfolio(portfolio_id: PortfolioId, session: SessionDep) -> None:
     },
     tags=["cash-accounts"],
 )
-def add_cash_account(data: CashAccountCreate, session: SessionDep) -> Portfolio:
+def add_cash_account(data: CashAccountCreate, session: SessionDep) -> PortfolioRead:
     """
     Track a bank balance, an e-wallet, or any pool of money held outside a broker.
 
@@ -543,7 +546,7 @@ def add_cash_account(data: CashAccountCreate, session: SessionDep) -> Portfolio:
     Use `transfer_cash` rather than a withdrawal plus a deposit when money moves to another
     account you own: it records both sides as one event and cannot leave half the movement.
     """
-    return create_cash_account(session, data)
+    return portfolio_payload(session, create_cash_account(session, data))
 
 
 @app.get(
@@ -554,15 +557,16 @@ def add_cash_account(data: CashAccountCreate, session: SessionDep) -> Portfolio:
     response_description="Cash accounts ordered by creation time",
     tags=["cash-accounts"],
 )
-def list_cash_accounts(session: SessionDep) -> list[Portfolio]:
+def list_cash_accounts(session: SessionDep) -> list[PortfolioRead]:
     """The cash subset of `list_portfolios`, for totalling liquid assets held outside a broker."""
-    return list(
+    accounts = list(
         session.scalars(
             select(Portfolio)
             .where(Portfolio.kind == PortfolioKind.CASH.value)
             .order_by(Portfolio.created_at)
         ).all()
     )
+    return portfolio_payloads(session, accounts)
 
 
 @app.post(
@@ -580,7 +584,7 @@ def list_cash_accounts(session: SessionDep) -> list[Portfolio]:
     },
     tags=["liability-accounts"],
 )
-def add_liability_account(data: LiabilityAccountCreate, session: SessionDep) -> Portfolio:
+def add_liability_account(data: LiabilityAccountCreate, session: SessionDep) -> PortfolioRead:
     """
     Track a loan, so net worth reflects what is owed and not only what is held.
 
@@ -597,7 +601,7 @@ def add_liability_account(data: LiabilityAccountCreate, session: SessionDep) -> 
     `get_portfolio_performance` returns no return figure for this account, by design: a rate of
     return divides a gain by the capital that produced it, and a debt is not capital at work.
     """
-    return create_liability_account(session, data)
+    return portfolio_payload(session, create_liability_account(session, data))
 
 
 @app.get(
@@ -608,15 +612,16 @@ def add_liability_account(data: LiabilityAccountCreate, session: SessionDep) -> 
     response_description="Liability accounts ordered by creation time",
     tags=["liability-accounts"],
 )
-def list_liability_accounts(session: SessionDep) -> list[Portfolio]:
+def list_liability_accounts(session: SessionDep) -> list[PortfolioRead]:
     """The debt subset of `list_portfolios`, for totalling what is owed across lenders."""
-    return list(
+    accounts = list(
         session.scalars(
             select(Portfolio)
             .where(Portfolio.kind == PortfolioKind.LIABILITY.value)
             .order_by(Portfolio.created_at)
         ).all()
     )
+    return portfolio_payloads(session, accounts)
 
 
 @app.get(

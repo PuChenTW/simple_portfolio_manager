@@ -3141,6 +3141,19 @@
      "title": "Created At",
      "type": "string"
     },
+    "first_event_date": {
+     "anyOf": [
+      {
+       "format": "date",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "description": "The date of the earliest journal event, or null when the account has no events. This is where history starts, which `created_at` is not: an imported account can be recorded years after the transactions it holds.",
+     "title": "First Event Date"
+    },
     "id": {
      "title": "Id",
      "type": "string"
@@ -7400,5 +7413,5 @@
    "type": "object"
   }
  },
- "version": "0.8.0"
+ "version": "0.9.0"
 }

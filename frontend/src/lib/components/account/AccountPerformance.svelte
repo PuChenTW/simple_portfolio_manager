@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { NavHistory, Performance } from '../../api/client'
   import { money, percent, shortDate } from '../../format'
+  import { router } from '../../route.svelte'
 
   let {
     performance,
@@ -16,6 +17,10 @@
 
   const currency = $derived(performance.base_currency)
   const coverage = $derived(performance.coverage)
+
+  // A gap is discovered here and fixed on the settings tab, so the warning links to it rather
+  // than describing where to go.
+  const settingsHref = $derived(router.account(performance.portfolio_id, 'settings'))
 
   // Draft dates, so typing one end does not fire a request before the other is chosen. Re-seeded
   // whenever the applied range changes underneath the form.
@@ -105,8 +110,8 @@
            print the same fact twice. -->
       {#if coverage.missing_dates.length}
         <p class="fix">
-          Build the missing dates with <code>portfolio-admin rebuild-snapshots</code>. They are
-          reported rather than interpolated, so the gap closes only once they exist.
+          Build the missing dates under <a href={settingsHref}>Settings</a>. They are reported
+          rather than interpolated, so the gap closes only once they exist.
         </p>
       {/if}
     </div>

@@ -75,8 +75,10 @@ with today's quote, which would make a backfilled series look like it predicted 
 
 ```bash
 # Build daily snapshots over a range. Safe to re-run: existing dates are skipped, so an
-# interrupted run is resumed by repeating the command.
-uv run portfolio-admin rebuild-snapshots PORTFOLIO_ID 2026-07-01 2026-07-31
+# interrupted run is resumed by repeating the request.
+curl -X POST 'http://127.0.0.1:8001/api/v1/portfolios/PORTFOLIO_ID/valuation-snapshots/rebuild' \
+  -H 'content-type: application/json' \
+  -d '{"start_date": "2026-07-01", "end_date": "2026-07-31"}'
 
 curl 'http://127.0.0.1:8001/api/v1/portfolios/PORTFOLIO_ID/performance?start_date=2026-07-01&end_date=2026-07-31'
 ```

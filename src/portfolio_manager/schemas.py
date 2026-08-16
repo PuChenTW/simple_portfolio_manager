@@ -89,6 +89,14 @@ class PortfolioRead(ApiModel):
     institution: str | None = Field(
         default=None, description="The bank or broker holding the account, when recorded."
     )
+    first_event_date: date | None = Field(
+        default=None,
+        description=(
+            "The date of the earliest journal event, or null when the account has no events. "
+            "This is where history starts, which `created_at` is not: an imported account can "
+            "be recorded years after the transactions it holds."
+        ),
+    )
     created_at: datetime
 
 

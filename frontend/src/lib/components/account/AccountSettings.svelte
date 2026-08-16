@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api, ApiError, type Portfolio } from '../../api/client'
   import { shortDate } from '../../format'
+  import AccountSnapshots from './AccountSnapshots.svelte'
 
   let {
     portfolio,
@@ -127,6 +128,8 @@
       transfer to it — relabelling one would reinterpret every leg already posted.
     </p>
   </section>
+
+  <AccountSnapshots {portfolio} />
 
   <section class="card danger">
     <header><h2>Delete this account</h2></header>

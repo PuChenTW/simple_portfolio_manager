@@ -21,6 +21,7 @@ export type JournalLeg = Schemas['JournalLegRead']
 export type Performance = Schemas['PerformanceRead']
 export type NavHistory = Schemas['NavHistoryRead']
 export type SnapshotSummary = Schemas['SnapshotSummary']
+export type Rebuild = Schemas['RebuildRead']
 
 /** Every asset class the API defines, in taxonomy order.
  *
@@ -86,6 +87,18 @@ async function get<T>(path: string): Promise<T> {
 async function put<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(apiUrl(path), {
     method: 'PUT',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) {
+    throw await toApiError(response)
+  }
+  return response.json() as Promise<T>
+}
+
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(apiUrl(path), {
+    method: 'POST',
     headers: { accept: 'application/json', 'content-type': 'application/json' },
     body: JSON.stringify(body),
   })
@@ -181,6 +194,24 @@ export const api = {
       `portfolios/${encodeURIComponent(portfolioId)}/nav-history` +
         query({ start_date: startDate, end_date: endDate }),
     ),
+
+  /** Build snapshots across one date range.
+   *
+   * Callers pass a range no wider than a calendar month. The endpoint is synchronous -- it
+   * replays the journal once per date inside the request -- so a multi-year range would hold
+   * the connection open past any browser timeout, and the work would continue server-side with
+   * nothing watching. Month alignment is not an arbitrary size: the Redis history cache buckets
+   * bars by calendar month, so a month-aligned request asks for exactly what it stores.
+   *
+   * `force` replaces snapshots that already exist. Without it those dates are skipped, which is
+   * what makes an interrupted run recoverable by simply repeating it.
+   */
+  rebuildSnapshots: (portfolioId: string, startDate: string, endDate: string, force = false) =>
+    post<Rebuild>(`portfolios/${encodeURIComponent(portfolioId)}/valuation-snapshots/rebuild`, {
+      start_date: startDate,
+      end_date: endDate,
+      force_revision: force,
+    }),
 
   /** Rename an account or record who holds it. Currency and kind are fixed at creation. */
   updatePortfolio: (portfolioId: string, body: { name?: string; institution?: string }) =>

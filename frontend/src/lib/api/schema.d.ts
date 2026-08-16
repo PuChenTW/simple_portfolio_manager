@@ -2150,6 +2150,11 @@ export interface components {
              */
             institution?: string | null;
             /**
+             * First Event Date
+             * @description The date of the earliest journal event, or null when the account has no events. This is where history starts, which `created_at` is not: an imported account can be recorded years after the transactions it holds.
+             */
+            first_event_date?: string | null;
+            /**
              * Created At
              * Format: date-time
              */

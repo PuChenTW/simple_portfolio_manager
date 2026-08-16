@@ -565,3 +565,110 @@ def test_dashboard_is_served_at_the_root_with_relative_assets(harness) -> None:
     # The mount must not shadow the API. A prefix match at "/" would swallow every route.
     assert harness.client.get("/api/v1/portfolios").status_code == 200
     assert harness.client.get("/health").status_code == 200
+
+
+def test_first_event_date_is_null_until_an_event_is_posted(harness) -> None:
+    """A new account has no history, and `created_at` must not stand in for one it lacks.
+
+    The dashboard builds an "all history" snapshot range from this field. Falling back to
+    `created_at` would start that range at a plausible wrong date -- an imported account is
+    recorded long after the transactions it holds -- which is the guess invariant 1 refuses.
+    """
+    portfolio_id = harness.portfolio()
+    fresh = harness.client.get(f"/api/v1/portfolios/{portfolio_id}").json()
+    assert fresh["first_event_date"] is None
+
+    harness.client.post(
+        f"/api/v1/portfolios/{portfolio_id}/transactions",
+        json={
+            "request_id": "d-1",
+            "transaction_type": "deposit",
+            "amount": "10000",
+            "occurred_at": "2026-03-11T00:00:00Z",
+        },
+    )
+    read = harness.client.get(f"/api/v1/portfolios/{portfolio_id}").json()
+    assert read["first_event_date"] == "2026-03-11"
+
+
+def test_first_event_date_reports_the_earliest_event_not_the_latest(harness) -> None:
+    """Events post in any order, so the field must be a minimum rather than the last write."""
+    portfolio_id = harness.portfolio()
+    for request_id, occurred_at in (
+        ("d-1", "2026-05-20T00:00:00Z"),
+        ("d-2", "2026-01-07T00:00:00Z"),
+        ("d-3", "2026-09-02T00:00:00Z"),
+    ):
+        harness.client.post(
+            f"/api/v1/portfolios/{portfolio_id}/transactions",
+            json={
+                "request_id": request_id,
+                "transaction_type": "deposit",
+                "amount": "100",
+                "occurred_at": occurred_at,
+            },
+        )
+
+    read = harness.client.get(f"/api/v1/portfolios/{portfolio_id}").json()
+    assert read["first_event_date"] == "2026-01-07"
+
+
+def test_listing_portfolios_resolves_every_first_event_date_in_one_query(harness) -> None:
+    """Listing must not cost a query per portfolio.
+
+    `list_portfolios` is how a caller discovers accounts, so an N+1 here scales with the number
+    of books someone owns. This is the same guarantee `legs_for_events` gives a journal page.
+    """
+    from sqlalchemy import event as sa_event
+
+    ids = [harness.portfolio(f"Portfolio {index}") for index in range(5)]
+    for index, portfolio_id in enumerate(ids):
+        harness.client.post(
+            f"/api/v1/portfolios/{portfolio_id}/transactions",
+            json={
+                "request_id": f"d-{index}",
+                "transaction_type": "deposit",
+                "amount": "100",
+                "occurred_at": f"2026-0{index + 1}-05T00:00:00Z",
+            },
+        )
+
+    statements: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany) -> None:
+        if "journal_events" in statement:
+            statements.append(statement)
+
+    engine = harness.session_factory.kw["bind"]
+    sa_event.listen(engine, "before_cursor_execute", record)
+    try:
+        listed = harness.client.get("/api/v1/portfolios").json()
+    finally:
+        sa_event.remove(engine, "before_cursor_execute", record)
+
+    assert {item["id"] for item in listed} == set(ids)
+    assert [item["first_event_date"] for item in listed] == [
+        f"2026-0{index + 1}-05" for index in range(5)
+    ]
+    assert len(statements) == 1, f"expected one journal query, got {len(statements)}: {statements}"
+
+
+def test_cash_and_liability_listings_also_carry_first_event_date(harness) -> None:
+    """The field is on `PortfolioRead`, so every route returning that model must populate it."""
+    cash_id = harness.cash_account()
+    loan_id = harness.liability_account()
+    for portfolio_id, request_id in ((cash_id, "c-1"), (loan_id, "l-1")):
+        harness.client.post(
+            f"/api/v1/portfolios/{portfolio_id}/transactions",
+            json={
+                "request_id": request_id,
+                "transaction_type": "deposit",
+                "amount": "500",
+                "occurred_at": "2026-02-14T00:00:00Z",
+            },
+        )
+
+    for path in ("/api/v1/cash-accounts", "/api/v1/liability-accounts"):
+        listed = harness.client.get(path).json()
+        assert listed, path
+        assert all(item["first_event_date"] == "2026-02-14" for item in listed), path

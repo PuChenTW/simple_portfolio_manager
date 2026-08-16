@@ -11,8 +11,6 @@ Python 3.13, `uv`, Alembic, Redis (optional), no frontend build step.
 - `uv run portfolio-manager` — run the API at `http://127.0.0.1:8001`.
 - `uv run portfolio-mcp` — run the MCP server (stdio; needs the API running). Set
   `PORTFOLIO_MCP_TRANSPORT=streamable-http` for the HTTP transport.
-- `uv run portfolio-admin rebuild-snapshots <portfolio_id> <start> <end>` — build daily
-  valuation snapshots. Safe to re-run; existing dates are skipped.
 - `uv run pytest` — deterministic tests; live Yahoo tests are skipped.
 - `uv run pytest -m external` — exercise `AAPL`, `2330.TW`, `BTC-USD` online.
 - `uv run ruff check .` — imports and style.

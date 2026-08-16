@@ -120,7 +120,8 @@ existing numbers, which is a separate decision from recording a debt.
 the only correct source of past state — `positions` and `cash_balances` describe the present.
 
 `valuation.py` prices a replayed state with history bounded by the valuation date and stores it as
-a snapshot. It also holds the re-runnable range rebuild behind `portfolio-admin rebuild-snapshots`.
+a snapshot. It also holds `rebuild_snapshots`, the re-runnable range rebuild — see "Who rebuilds
+snapshots" below for its three callers.
 
 `performance.py` computes TWR and XIRR from stored snapshots and journal flows, and reports the
 coverage behind them: a gap, a partial valuation, or an event whose cash flow cannot be classified
@@ -129,6 +130,41 @@ each makes a return unreliable, and the number is worthless without that context
 `fx.py` resolves point-in-time exchange rates — direct, inverted, or crossed — and stores every
 observation so a conversion can be audited. `consolidation.py` groups portfolios and expresses
 their holdings in one reporting currency, keeping each local figure beside its converted one.
+
+## Who rebuilds snapshots
+
+`rebuild_snapshots` has three callers, and the differences between them are the whole design.
+
+**`snapshot_cron.py`** runs unattended: every portfolio, a rolling window of recent days, once a
+day. It never passes `force_revision`, so it only ever fills gaps. This covers the ordinary case
+completely — a portfolio in daily use needs no manual rebuild at all.
+
+**The MCP tool** hands an agent an arbitrary range. It is the endpoint verbatim.
+
+**The dashboard** covers the two cases the cron structurally cannot. A *backfill* reaches further
+back than the rolling window ever will, which is what an imported account or a newly added book
+needs. A *repair* rebuilds dates that already have snapshots, after a reversal or a corrected
+trade made the stored valuations wrong — and that requires `force_revision`, because the
+non-force path skips exactly those dates. The two are one control with a flag, and the flag is
+the destructive one, so it takes a second click that names how many snapshots it will replace.
+
+The dashboard splits its range into **calendar months** and issues one request per month. Two
+reasons. The endpoint is synchronous — a multi-year backfill in one request holds a DB session
+open past any sane browser timeout, and the work then continues server-side with nobody watching.
+And month alignment is not an arbitrary chunk size: `cache.py` widens every history fetch to month
+boundaries and stores whole months, so a month-aligned chunk asks for exactly what the cache
+stores rather than straddling four buckets.
+
+A failed chunk does not stop the run. This mirrors one level up what `rebuild_snapshots` already
+does for a single bad date — the range is not abandoned, the failure is reported. Because every
+chunk is independently re-runnable, a partial run is recovered by clicking again: the months that
+succeeded are skipped.
+
+There was a fourth caller, a `portfolio-admin rebuild-snapshots` CLI, removed once the dashboard
+covered its cases. Its module docstring claimed these operations were "deliberately not HTTP
+endpoints… not reachable from an agent loop", which had been false since the endpoint and its MCP
+tool shipped. The one capability it uniquely held was running against a database with the service
+down — a recovery path that was never used. Do not re-add it without that need being real.
 
 ## The market-data cache
 
@@ -232,6 +268,18 @@ Each bump to `tests/legacy_api_baseline.json` was a deliberate decision, not a r
   contents, so every ETF arrives `unclassified` and stays that way until someone resolves it;
   reading them as equity would have made the allocation view look complete while misfiling gold
   and bond funds where nothing downstream could detect it.
+- **0.9.0** — additive. `first_event_date` on `PortfolioRead`, so a caller can ask where an
+  account's history starts without paging its journal to the end. The dashboard's snapshot
+  rebuild needs it for an "all history" range, and there was no cheap way to get it:
+  `list_journal_events` returns newest first with no sort control, making the answer two requests
+  and an ordering nobody promised.
+
+  It is `null` for an account with no events, never `created_at`. Those are different facts — an
+  imported account is recorded long after the transactions it holds — and substituting one for
+  the other would silently start a backfill at the wrong date, which invariant 1 forbids.
+
+  `list_portfolios` resolves the whole page in one `GROUP BY`, the same shape as `legs_for_events`
+  and `reversed_types_for`, so discovering accounts never costs a query per row.
 
 ## Container build ordering
 

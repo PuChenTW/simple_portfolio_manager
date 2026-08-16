@@ -77,6 +77,19 @@ The value is deliberately not defaulted to something plausible. A provider repor
 wrapper, never what it holds, so every ETF arrives `unclassified` -- reading them as equity
 would have made the allocation view look complete while silently misfiling gold and bond funds,
 and nothing downstream could have detected it.
+
+0.9.0 added `first_event_date` to `PortfolioRead` -- the second frozen shape to move, after
+0.5.0's `kind` and `institution`, and for the same kind of reason. The dashboard rebuilds
+snapshots over "all history", and the date that range starts at is a fact the server holds and
+the client cannot cheaply ask for: `list_journal_events` returns newest first with no sort
+control, so the answer costs a page request to learn the total and a second at the last offset,
+resting on an ordering nothing promises to keep. The field defaults to `None`, so a client that
+ignores it reads exactly what it read before.
+
+It is `null` for an account with no events rather than falling back to `created_at`. The two are
+different facts -- an imported account is recorded long after the transactions it holds -- and
+substituting one for the other would start a backfill at a plausible wrong date, which is the
+guess invariant 1 exists to refuse.
 """
 
 import asyncio
