@@ -122,7 +122,10 @@
     <div class="tile">
       <p class="label">
         Time-weighted return
-        <span class="help" title={performance.twr_method_description}>?</span>
+        <button class="help" type="button" aria-label={performance.twr_method_description}>
+          ?
+          <span class="tip">{performance.twr_method_description}</span>
+        </button>
       </p>
       <p class="figure num {sign(performance.twr_percent)}">
         {percent(performance.twr_percent, 2)}
@@ -138,7 +141,10 @@
     <div class="tile">
       <p class="label">
         Money-weighted return
-        <span class="help" title={performance.xirr_method_description}>?</span>
+        <button class="help" type="button" aria-label={performance.xirr_method_description}>
+          ?
+          <span class="tip">{performance.xirr_method_description}</span>
+        </button>
       </p>
       {#if performance.xirr_percent == null}
         <!-- Never an opaque blank: the API always says why, and the reason is the answer. -->
@@ -320,6 +326,7 @@
   }
 
   .tile {
+    position: relative;
     padding: 16px var(--pad);
     background: var(--surface);
     border: 1px solid var(--border);
@@ -351,11 +358,46 @@
     justify-content: center;
     width: 14px;
     height: 14px;
+    padding: 0;
+    border: 0;
     border-radius: 50%;
     background: var(--surface-sunken);
     color: var(--text-faint);
+    font: inherit;
     font-size: 10px;
+    line-height: 1;
     cursor: help;
+  }
+
+  /* The native `title` attribute waits one to two seconds before it opens, and no stylesheet can
+     shorten that delay. This tooltip opens on the first frame instead. It anchors to the tile
+     rather than to the 14px dot, so a long description cannot overflow the card, and it opens
+     below the tile so it never covers the figure it explains. */
+  .tip {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    right: 0;
+    z-index: 20;
+    padding: 8px 10px;
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 6px 20px rgb(0 0 0 / 18%);
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.45;
+    text-align: left;
+    white-space: normal;
+    opacity: 0;
+    visibility: hidden;
+  }
+
+  .help:hover .tip,
+  .help:focus-visible .tip {
+    opacity: 1;
+    visibility: visible;
   }
 
   .coverage {
