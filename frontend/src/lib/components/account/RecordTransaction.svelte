@@ -37,6 +37,13 @@
   let fee = $state('')
   let tax = $state('')
 
+  // Both exist for entering from a statement, which is the main reason to post by hand at all.
+  // Collapsed by default because ordinary entry needs neither, and because a wrong
+  // `settlement_amount` unbalances the event rather than merely mis-stating it.
+  let advancedOpen = $state(false)
+  let settlementAmount = $state('')
+  let sourceReference = $state('')
+
   /** Whether this shape and this account together allow a ticker.
    *
    * Both halves matter. `reject_security_activity` refuses a ticker on a positionless book even
@@ -96,12 +103,15 @@
   // Only the fields this shape actually renders are passed. A fee typed into a previous trade
   // still sits in `fee` when the type switches to a deposit, and the preview must not quietly
   // charge it against an entry whose form never showed it.
+  // A supplied `settlement_amount` overrides the computed figure in `build_legs`, so the preview
+  // shows it too. Stating the computed figure while the server posts another is worse than
+  // showing nothing: the line's whole job is to say what will actually land.
   const effect = $derived(
     shape === 'trade'
-      ? cashEffect({ type, quantity, unitPrice, fee, tax })
+      ? cashEffect({ type, quantity, unitPrice, fee, tax, settlementAmount })
       : shape === 'income'
-        ? cashEffect({ type, amount, tax })
-        : cashEffect({ type, amount }),
+        ? cashEffect({ type, amount, tax, settlementAmount })
+        : cashEffect({ type, amount, settlementAmount }),
   )
 
   /** `YYYY-MM-DD` in local time. `toISOString` shifts the date across a timezone boundary. */
@@ -152,6 +162,8 @@
     unitPrice = ''
     fee = ''
     tax = ''
+    settlementAmount = ''
+    sourceReference = ''
     resolved = null
     unresolved = null
     error = null
@@ -209,6 +221,9 @@
     if (shape === 'trade' && fee.trim()) body.fee = fee.trim()
     if (shape !== 'cash' && tax.trim()) body.tax = tax.trim()
     if (memo.trim()) body.memo = memo.trim()
+    // Omitted when empty, so an untouched disclosure changes nothing about the request.
+    if (settlementAmount.trim()) body.settlement_amount = settlementAmount.trim()
+    if (sourceReference.trim()) body.source_reference = sourceReference.trim()
     return body
   }
 
@@ -227,6 +242,8 @@
       amountInput?.focus()
     } catch (err) {
       error = errorFor(err)
+      // A refusal shown inside a collapsed disclosure is a refusal nobody sees.
+      if (error.field === 'settlement_amount') advancedOpen = true
     } finally {
       submitting = false
     }
@@ -402,6 +419,40 @@
         <input type="text" bind:value={memo} maxlength="200" />
       </label>
 
+      <!-- Collapsed by default. Both fields exist for reconciling against a statement, which
+           ordinary entry never needs, and a wrong settlement figure unbalances the event. -->
+      <details bind:open={advancedOpen} class="advanced">
+        <summary>Advanced</summary>
+
+        <div class="row">
+          <label class="field">
+            <span class="label">Settlement amount ({portfolio.base_currency})</span>
+            <input
+              type="text"
+              inputmode="decimal"
+              bind:value={settlementAmount}
+              placeholder="computed"
+              aria-invalid={!!fieldError('settlement_amount')}
+            />
+            <span class="hint faint">
+              The exact cash a broker reports, signed. Overrides the figure computed above; the
+              event must still balance.
+            </span>
+            {#if fieldError('settlement_amount')}
+              <span class="negative msg">{fieldError('settlement_amount')}</span>
+            {/if}
+          </label>
+
+          <label class="field">
+            <span class="label">Source reference</span>
+            <input type="text" bind:value={sourceReference} maxlength="120" placeholder="Confirmation or statement ID" />
+            <span class="hint faint">
+              What makes this event reconcilable against the document it came from.
+            </span>
+          </label>
+        </div>
+      </details>
+
       <!-- One computed line, deliberately not a leg table. It catches a misplaced decimal
            before it reaches a ledger whose only correction is a reversal dated today. -->
       {#if effect !== null}
@@ -548,6 +599,22 @@
     color: var(--text);
     background: var(--surface);
     border: 1px solid var(--border-strong);
+  }
+
+  .advanced summary {
+    font-size: 12px;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+
+  .advanced summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  .advanced .row {
+    margin-top: 12px;
   }
 
   .note {
