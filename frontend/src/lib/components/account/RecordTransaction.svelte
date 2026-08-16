@@ -386,6 +386,17 @@
         </div>
       {/if}
 
+      <!-- The vocabulary trap, stated rather than papered over. `interest` credits cash and
+           means interest *received*; interest charged on a loan is a `fee`, which is the
+           server's own vocabulary. Renaming either in the UI would put a second name on a
+           concept that already has one, so the form explains instead. -->
+      {#if portfolio.kind === 'liability' && type === 'interest'}
+        <p class="note faint">
+          This records interest <em>received</em>, which credits the account. Record interest
+          charged on this loan as a <strong>Fee</strong>.
+        </p>
+      {/if}
+
       <label class="field wide">
         <span class="label">Memo <span class="faint">(optional)</span></span>
         <input type="text" bind:value={memo} maxlength="200" />
@@ -537,6 +548,12 @@
     color: var(--text);
     background: var(--surface);
     border: 1px solid var(--border-strong);
+  }
+
+  .note {
+    max-width: 460px;
+    margin: 0;
+    font-size: 12px;
   }
 
   /* Advisory, not a refusal. `--warning` rather than `--negative`: the entry can still post,
