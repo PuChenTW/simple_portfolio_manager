@@ -312,6 +312,43 @@ moved it to the root rather than keeping both. One dashboard, one URL — a redi
 been a second name for the same page, kept alive for bookmarks that only ever existed on one
 developer's machine.
 
+## The chart dependency
+
+`AGENTS.md` described this project as having "no frontend build step" long after `frontend/`
+became a Svelte build. The dashboard hand-rolled its visuals to match: `Allocation.svelte` draws
+its own arcs, and the performance tab drew its NAV series as an SVG path built from a loop.
+
+That held until the performance chart needed axis values, a time-proportional x axis, and a hover
+readout at a point in time. Those are four separate pieces of machinery — a scale, a nice-number
+tick generator, hit-testing, and a positioned tooltip — not one, and each has a well-known
+correct implementation that is not worth rediscovering. LayerChart replaced them.
+
+It was chosen over uPlot, which is smaller and faster, because it renders **SVG**. The dashboard
+themes entirely through CSS custom properties and has a light/dark toggle; a canvas chart cannot
+see those tokens, so every color would have to be read from the DOM and pushed back in on each
+toggle, and the chart would lose the DOM nodes that carry its accessible label. That is real
+complexity traded for performance that a few thousand points do not need. LayerChart also
+requires Svelte 5 with runes, which is what this app already is.
+
+Two consequences worth knowing before editing `NavChart.svelte`:
+
+- **The library's defaults do not match this dashboard and must be overridden explicitly.** Its
+  gridlines ship near-black, and its tooltip ships a light panel that renders near-white text on
+  white in dark mode. The override selectors are LayerChart's own (`lc-axis-grid`, `lc-axis-rule`,
+  `lc-tooltip-content`), so they are worth re-checking after a version bump.
+- **The tooltip is portaled to the end of `<body>`**, which puts it outside the component's style
+  scope. Its rules are therefore `:global` and cannot be prefixed with a wrapper class.
+
+The chart is scoped to the NAV series. `Allocation.svelte` still hand-rolls its arcs, deliberately:
+it works and it is tested, and rewriting a working component to justify a new dependency is
+backwards. A third chart is the point to revisit that.
+
+The hover snaps to real snapshots (`bisect-x`) and never interpolates between two plotted points.
+An interpolated reading is indistinguishable from a measured one, which is what invariant 5
+forbids for the line itself. For the same reason the x axis is time-scaled rather than
+index-spaced: even spacing draws a three-month gap exactly as wide as a weekend, which becomes a
+wrong statement once the axis carries date labels.
+
 ## Sub-path deployment
 
 The app has no URL-prefix setting, and must not grow one. Relative asset URLs are the entire

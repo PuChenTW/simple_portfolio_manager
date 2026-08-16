@@ -24,7 +24,10 @@ function message(err: unknown): string {
 
 export const PAGE_SIZE = 25
 
-/** Default performance window: the trailing year, which is the span most snapshots cover. */
+/** Default performance window: the trailing year, which is the span most snapshots cover.
+ *
+ * This is deliberately the same range the `1y` preset produces, so the tab opens with that
+ * preset highlighted rather than with no preset selected over a range one of them describes. */
 function defaultRange(): { start: string; end: string } {
   const end = new Date()
   const start = new Date(end)
@@ -38,6 +41,46 @@ function iso(value: Date): string {
   const day = String(value.getDate()).padStart(2, '0')
   return `${value.getFullYear()}-${month}-${day}`
 }
+
+export type RangePresetId = 'ytd' | '1y' | '3y' | '5y' | 'all'
+
+export const RANGE_PRESETS: ReadonlyArray<{ id: RangePresetId; label: string }> = [
+  { id: 'ytd', label: 'YTD' },
+  { id: '1y', label: '1Y' },
+  { id: '3y', label: '3Y' },
+  { id: '5y', label: '5Y' },
+  { id: 'all', label: 'All' },
+]
+
+/**
+ * The dates a preset means, clamped to where the account's history actually starts.
+ *
+ * A preset names a whole range, so it pins `end` to today rather than keeping whatever was
+ * there: "1 year" ending on a stale date states something false about what is displayed.
+ *
+ * The clamp is the reason `firstEventDate` is a parameter. A 5Y preset on an account with
+ * fourteen months of history would otherwise ask the performance endpoint for a beginning value
+ * from before the first event, which is a value that does not exist. `all` has no span of its
+ * own and is entirely the clamp.
+ */
+export function presetRange(
+  id: RangePresetId,
+  firstEventDate: string | null,
+): { start: string; end: string } {
+  const today = new Date()
+  const start = new Date(today)
+
+  if (id === 'ytd') start.setMonth(0, 1)
+  else if (id === '1y') start.setFullYear(start.getFullYear() - 1)
+  else if (id === '3y') start.setFullYear(start.getFullYear() - 3)
+  else if (id === '5y') start.setFullYear(start.getFullYear() - 5)
+
+  const wanted = id === 'all' ? (firstEventDate ?? iso(start)) : iso(start)
+  // String comparison is correct and cheap here: `YYYY-MM-DD` sorts lexicographically.
+  const clamped = firstEventDate && wanted < firstEventDate ? firstEventDate : wanted
+  return { start: clamped, end: iso(today) }
+}
+
 
 /**
  * One account's page.
@@ -59,6 +102,13 @@ export class AccountState {
   offset = $state(0)
   range = $state(defaultRange())
 
+  /** Which preset button produced `range`, or null once the dates are hand-edited.
+   *
+   * This lives here rather than in the performance component because loading a new range swaps
+   * that component for a placeholder, destroying its state -- a click would clear its own
+   * highlight. Seeded to `1y` because `defaultRange` is exactly what that preset produces. */
+  preset = $state<RangePresetId | null>('1y')
+
   /** Discards a response for an account the user already navigated away from. */
   #seq = 0
 
@@ -79,6 +129,7 @@ export class AccountState {
     this.navHistory = idle()
     this.offset = 0
     this.range = defaultRange()
+    this.preset = '1y'
 
     void this.#run((v) => (this.identity = v), () => api.portfolio(portfolioId))
   }
@@ -140,8 +191,20 @@ export class AccountState {
     ])
   }
 
+  /** A hand-picked range. It belongs to no preset, and highlighting one would claim the view is
+   *  something it is not. */
   setRange(start: string, end: string): void {
     this.range = { start, end }
+    this.preset = null
+    void this.loadPerformance()
+  }
+
+  /** A preset range. The id is remembered rather than re-derived from the dates, because the
+   *  clamp to `first_event_date` makes presets collide: on a three-year-old account, 5Y and All
+   *  produce identical dates, and deriving the highlight would credit the wrong button. */
+  setPreset(id: RangePresetId, firstEventDate: string | null): void {
+    this.range = presetRange(id, firstEventDate)
+    this.preset = id
     void this.loadPerformance()
   }
 

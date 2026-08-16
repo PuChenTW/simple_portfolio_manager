@@ -2,7 +2,8 @@
 
 A local-first portfolio manager: a FastAPI service over SQLite that records an auditable
 double-entry journal, values it historically, and exposes every endpoint to agents through MCP.
-Python 3.13, `uv`, Alembic, Redis (optional), no frontend build step.
+Python 3.13, `uv`, Alembic, Redis (optional). The dashboard is a Svelte build in `frontend/`,
+charted with LayerChart.
 
 ## Commands
 

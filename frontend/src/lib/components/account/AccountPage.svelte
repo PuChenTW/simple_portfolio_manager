@@ -173,7 +173,9 @@
             performance={account.performance.data}
             navHistory={account.navHistory.data}
             range={account.range}
+            activePreset={account.preset}
             onrange={(start, end) => account.setRange(start, end)}
+            onpreset={(id) => account.setPreset(id, portfolio.first_event_date ?? null)}
           />
         {/if}
       {:else if current === 'settings'}

@@ -1,18 +1,27 @@
 <script lang="ts">
   import type { NavHistory, Performance } from '../../api/client'
+  import { RANGE_PRESETS, type RangePresetId } from '../../account.svelte'
   import { money, percent, shortDate } from '../../format'
   import { router } from '../../route.svelte'
+  import NavChart from './NavChart.svelte'
 
   let {
     performance,
     navHistory,
     range,
+    activePreset,
     onrange,
+    onpreset,
   }: {
     performance: Performance
     navHistory: NavHistory | null
     range: { start: string; end: string }
+    /** Which preset produced `range`, or null for a hand-picked one. Owned by the page rather
+     *  than this component: loading a range replaces this component with a placeholder, so state
+     *  held here would not survive the click that set it. */
+    activePreset: RangePresetId | null
     onrange: (start: string, end: string) => void
+    onpreset: (id: RangePresetId) => void
   } = $props()
 
   const currency = $derived(performance.base_currency)
@@ -45,38 +54,12 @@
     return parsed > 0 ? 'positive' : 'negative'
   }
 
-  /** The NAV series as a sparkline path, drawn only from dates that actually have a snapshot.
-   *
-   * Missing dates are never bridged with a straight line: an interpolated segment is
-   * indistinguishable from a real one, which is exactly what invariant 5 forbids. They are
-   * counted and reported below the chart instead. */
-  const spark = $derived.by(() => {
-    const points = (navHistory?.snapshots ?? [])
-      .map((s) => ({ date: s.valuation_date, value: Number(s.total_value) }))
-      .filter((p) => Number.isFinite(p.value))
-    if (points.length < 2) return null
-
-    const values = points.map((p) => p.value)
-    const min = Math.min(...values)
-    const max = Math.max(...values)
-    const span = max - min || 1
-    const width = 100
-    const height = 30
-
-    const coords = points.map((p, i) => {
-      const x = (i / (points.length - 1)) * width
-      const y = height - ((p.value - min) / span) * height
-      return `${x.toFixed(2)},${y.toFixed(2)}`
-    })
-
-    return {
-      line: `M${coords.join('L')}`,
-      area: `M${coords.join('L')}L${width},${height}L0,${height}Z`,
-      first: points[0],
-      last: points[points.length - 1],
-      count: points.length,
-    }
-  })
+  /** Only dates that actually have a snapshot are plotted. Missing dates are never bridged with
+   *  a straight line -- an interpolated segment is indistinguishable from a real one, which is
+   *  what invariant 5 forbids. They are counted and reported below the chart instead. */
+  const plotted = $derived(
+    (navHistory?.snapshots ?? []).filter((s) => Number.isFinite(Number(s.total_value))).length,
+  )
 </script>
 
 <div class="stack">
@@ -90,6 +73,24 @@
       <input type="date" bind:value={end} min={start} />
     </label>
     <button type="submit" disabled={invalidRange}>Update</button>
+
+    <!-- Presets apply on click rather than filling the inputs and waiting for Update. The draft
+         dates exist so typing one end does not fire a request before the other is chosen; one
+         click carries no such ambiguity. -->
+    <div class="presets" role="group" aria-label="Preset ranges">
+      {#each RANGE_PRESETS as preset (preset.id)}
+        <button
+          type="button"
+          class="preset"
+          class:active={activePreset === preset.id}
+          aria-pressed={activePreset === preset.id}
+          onclick={() => onpreset(preset.id)}
+        >
+          {preset.label}
+        </button>
+      {/each}
+    </div>
+
     {#if invalidRange}
       <p class="invalid negative">The start date must not be after the end date.</p>
     {/if}
@@ -160,21 +161,14 @@
       </span>
     </header>
 
-    {#if spark}
-      <svg
-        class="spark"
-        viewBox="0 0 100 30"
-        preserveAspectRatio="none"
-        role="img"
-        aria-label="Value from {money(String(spark.first.value), currency)} on {shortDate(
-          spark.first.date,
-        )} to {money(String(spark.last.value), currency)} on {shortDate(spark.last.date)}"
-      >
-        <path class="area" d={spark.area} />
-        <path class="line" d={spark.line} vector-effect="non-scaling-stroke" />
-      </svg>
+    {#if plotted >= 2}
+      <NavChart
+        {navHistory}
+        {currency}
+        beginningValue={performance.beginning_value}
+      />
       <p class="faint sub">
-        {spark.count} snapshots plotted.
+        {plotted} snapshots plotted.
         {#if navHistory?.missing_dates.length}
           {navHistory.missing_dates.length} date{navHistory.missing_dates.length === 1 ? '' : 's'}
           in range have none and are omitted rather than joined by a straight line.
@@ -182,8 +176,8 @@
       </p>
     {:else}
       <p class="empty muted">
-        Fewer than two snapshots in this range, so there is no series to plot. Build them with
-        <code>portfolio-admin rebuild-snapshots</code>.
+        Fewer than two snapshots in this range, so there is no series to plot. Build them under
+        <a href={settingsHref}>Settings</a>.
       </p>
     {/if}
 
@@ -284,6 +278,35 @@
     cursor: default;
   }
 
+  /* Pushed to the far edge so the presets read as a separate control rather than a fourth form
+     field. `.range` already wraps, so this drops to its own line when the row runs out of width. */
+  .presets {
+    display: flex;
+    margin-left: auto;
+  }
+
+  .presets .preset {
+    padding: 7px 12px;
+    border-radius: 0;
+    margin-left: -1px;
+  }
+
+  .presets .preset:first-child {
+    border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+    margin-left: 0;
+  }
+
+  .presets .preset:last-child {
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  }
+
+  .presets .preset.active {
+    z-index: 1;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-color: var(--accent);
+  }
+
   .invalid {
     flex-basis: 100%;
     margin: 0;
@@ -357,24 +380,6 @@
     font-size: 12px;
   }
 
-  .spark {
-    display: block;
-    width: 100%;
-    height: 120px;
-  }
-
-  .line {
-    fill: none;
-    stroke: var(--accent);
-    stroke-width: 1.5;
-    stroke-linejoin: round;
-  }
-
-  .area {
-    fill: var(--accent-soft);
-    stroke: none;
-  }
-
   .ends,
   .flows {
     display: grid;
@@ -407,11 +412,6 @@
     margin: 0;
     font-size: 15px;
     font-weight: 500;
-  }
-
-  code {
-    font-family: var(--font-num);
-    font-size: 0.9em;
   }
 
   .empty {
