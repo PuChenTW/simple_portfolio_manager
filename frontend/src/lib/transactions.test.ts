@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
 import { ApiError } from './api/client'
-import { errorFor, shapeFor, typesForKind, TRANSACTION_TYPES } from './transactions'
+import {
+  cashEffect,
+  errorFor,
+  shapeFor,
+  typesForKind,
+  TRANSACTION_TYPES,
+} from './transactions'
 
 describe('shapeFor', () => {
   it('maps buys and sells to the trade shape', () => {
@@ -125,5 +131,109 @@ describe('errorFor', () => {
 
   it('falls back to a plain Error message', () => {
     expect(errorFor(new Error('network died')).message).toBe('network died')
+  })
+})
+
+// The line this covers is a second implementation of `build_legs`' arithmetic in TypeScript,
+// which makes it the one piece of the record form that inspection will not catch when it is
+// wrong. The expected values below come from `postings.py:139-143` and `_income_legs`.
+describe('cashEffect', () => {
+  describe('a trade', () => {
+    it('takes consideration plus costs out for a buy', () => {
+      // 10 x 100 = 1000, +5 fee +2 tax. Costs are *added* to what a buy pays.
+      expect(cashEffect({ type: 'buy', quantity: '10', unitPrice: '100', fee: '5', tax: '2' })).toBe(
+        -1007,
+      )
+    })
+
+    it('brings consideration minus costs in for a sell', () => {
+      // Costs are *subtracted* from what a sell receives. Getting this sign backwards is the
+      // plausible mistake, and it is why both directions are asserted with non-zero costs.
+      expect(
+        cashEffect({ type: 'sell', quantity: '10', unitPrice: '100', fee: '5', tax: '2' }),
+      ).toBe(993)
+    })
+
+    it('handles zero fee and zero tax in both directions', () => {
+      expect(cashEffect({ type: 'buy', quantity: '10', unitPrice: '100' })).toBe(-1000)
+      expect(cashEffect({ type: 'sell', quantity: '10', unitPrice: '100' })).toBe(1000)
+    })
+
+    it('treats an empty cost box as zero rather than as unknown', () => {
+      expect(
+        cashEffect({ type: 'buy', quantity: '2', unitPrice: '50', fee: '', tax: '' }),
+      ).toBe(-100)
+    })
+
+    it('applies a fee with no tax, and a tax with no fee', () => {
+      expect(cashEffect({ type: 'buy', quantity: '1', unitPrice: '100', fee: '3' })).toBe(-103)
+      expect(cashEffect({ type: 'sell', quantity: '1', unitPrice: '100', tax: '3' })).toBe(97)
+    })
+
+    it('handles a fractional quantity', () => {
+      expect(cashEffect({ type: 'buy', quantity: '0.5', unitPrice: '200' })).toBe(-100)
+    })
+
+    // The preview states what will actually be posted, and `build_legs` uses the supplied
+    // settlement over the computed one. Showing the computed figure here would state something
+    // the server is about to contradict.
+    it('reports a supplied settlement amount instead of the computed one', () => {
+      expect(
+        cashEffect({
+          type: 'buy',
+          quantity: '10',
+          unitPrice: '100',
+          fee: '5',
+          settlementAmount: '-1004.37',
+        }),
+      ).toBe(-1004.37)
+    })
+
+    it('reports nothing until quantity and price are both present', () => {
+      expect(cashEffect({ type: 'buy', quantity: '10' })).toBeNull()
+      expect(cashEffect({ type: 'buy', unitPrice: '100' })).toBeNull()
+      expect(cashEffect({ type: 'buy' })).toBeNull()
+    })
+
+    it('reports nothing for an unparseable figure', () => {
+      expect(cashEffect({ type: 'buy', quantity: 'ten', unitPrice: '100' })).toBeNull()
+    })
+  })
+
+  describe('a cash movement', () => {
+    it('adds cash for a deposit and a transfer in', () => {
+      expect(cashEffect({ type: 'deposit', amount: '500' })).toBe(500)
+      expect(cashEffect({ type: 'transfer_in', amount: '500' })).toBe(500)
+    })
+
+    it('removes cash for a withdrawal and a transfer out', () => {
+      expect(cashEffect({ type: 'withdrawal', amount: '500' })).toBe(-500)
+      expect(cashEffect({ type: 'transfer_out', amount: '500' })).toBe(-500)
+    })
+  })
+
+  describe('income and costs', () => {
+    // `_income_legs` credits cash with `gross - tax`: income is recorded gross with the
+    // withholding split out, and only the net actually arrives.
+    it('credits income net of withholding tax', () => {
+      expect(cashEffect({ type: 'dividend', amount: '100', tax: '30' })).toBe(70)
+      expect(cashEffect({ type: 'interest', amount: '100', tax: '30' })).toBe(70)
+    })
+
+    it('credits the full amount when no tax is withheld', () => {
+      expect(cashEffect({ type: 'dividend', amount: '100' })).toBe(100)
+    })
+
+    // A fee and a tax event are `_cash_pair` outflows. The `tax` *field* is withholding on
+    // income and has no part in them -- adding it here would double-count the same money.
+    it('removes cash for a fee and for a tax, ignoring the withholding field', () => {
+      expect(cashEffect({ type: 'fee', amount: '25' })).toBe(-25)
+      expect(cashEffect({ type: 'tax', amount: '25', tax: '9' })).toBe(-25)
+    })
+  })
+
+  it('reports nothing when the amount is missing', () => {
+    expect(cashEffect({ type: 'deposit' })).toBeNull()
+    expect(cashEffect({ type: 'dividend', amount: '' })).toBeNull()
   })
 })

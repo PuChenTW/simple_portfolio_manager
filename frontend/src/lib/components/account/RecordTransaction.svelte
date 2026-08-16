@@ -1,13 +1,15 @@
 <script lang="ts">
   import { api, type Portfolio, type TransactionCreate } from '../../api/client'
   import {
+    acceptsTicker,
+    cashEffect,
     errorFor,
     shapeFor,
     typesForKind,
     type ErrorField,
     type TransactionType,
   } from '../../transactions'
-  import { shortDate } from '../../format'
+  import { exactMoney, shortDate } from '../../format'
 
   let {
     portfolio,
@@ -29,6 +31,78 @@
   // ledger stores whatever arrives. Only the preview parses, and only to show a human a figure.
   let amount = $state('')
   let memo = $state('')
+  let ticker = $state('')
+  let quantity = $state('')
+  let unitPrice = $state('')
+  let fee = $state('')
+  let tax = $state('')
+
+  /** Whether this shape and this account together allow a ticker.
+   *
+   * Both halves matter. `reject_security_activity` refuses a ticker on a positionless book even
+   * for a fee or interest event, because a ticker there attaches an instrument to the leg. A
+   * field the server will refuse is a field this form must not render.
+   */
+  const showTicker = $derived(
+    acceptsTicker(type) && portfolio.kind !== 'cash' && portfolio.kind !== 'liability',
+  )
+
+  /** What the last blur resolved, so a stale name never sits beside a since-edited symbol. */
+  let resolved = $state<{ symbol: string; name: string; currency: string } | null>(null)
+  let resolving = $state(false)
+  let unresolved = $state<string | null>(null)
+
+  /** Resolve the symbol and report what it is, without ever blocking submit.
+   *
+   * The name is the point: a typo that resolves to a real but wrong company is the failure the
+   * server cannot catch, because both symbols are valid. The currency is the second point --
+   * comparing it here turns a post-submit `currency_mismatch` 422 into a pre-submit fact, out of
+   * a request that is already being made.
+   *
+   * Both warnings are advisory. An unresolvable symbol may simply be delisted, which
+   * `_resolve_or_fetch` cannot seed, and refusing to post it would make this form stricter than
+   * the ledger it writes to. The server stays the authority.
+   */
+  async function resolveTicker(): Promise<void> {
+    const symbol = ticker.trim().toUpperCase()
+    resolved = null
+    unresolved = null
+    if (!symbol) return
+
+    resolving = true
+    try {
+      const instrument = await api.marketInstrument(symbol)
+      // Discard a response for a symbol the user has already edited past.
+      if (ticker.trim().toUpperCase() !== symbol) return
+      resolved = { symbol, name: instrument.name, currency: instrument.currency }
+    } catch {
+      if (ticker.trim().toUpperCase() === symbol) unresolved = symbol
+    } finally {
+      resolving = false
+    }
+  }
+
+  const currencyWarning = $derived(
+    resolved && resolved.currency !== portfolio.base_currency
+      ? `${resolved.symbol} trades in ${resolved.currency}; this account is ${portfolio.base_currency}.`
+      : null,
+  )
+
+  /** The settlement cash this entry will move, recomputed as the user types.
+   *
+   * A single line, not a leg table: a full preview would duplicate more of `build_legs` in
+   * TypeScript, and the copy would drift from the server that actually posts.
+   */
+  // Only the fields this shape actually renders are passed. A fee typed into a previous trade
+  // still sits in `fee` when the type switches to a deposit, and the preview must not quietly
+  // charge it against an entry whose form never showed it.
+  const effect = $derived(
+    shape === 'trade'
+      ? cashEffect({ type, quantity, unitPrice, fee, tax })
+      : shape === 'income'
+        ? cashEffect({ type, amount, tax })
+        : cashEffect({ type, amount }),
+  )
 
   /** `YYYY-MM-DD` in local time. `toISOString` shifts the date across a timezone boundary. */
   function today(): string {
@@ -73,6 +147,13 @@
   function reset(full: boolean): void {
     amount = ''
     memo = ''
+    ticker = ''
+    quantity = ''
+    unitPrice = ''
+    fee = ''
+    tax = ''
+    resolved = null
+    unresolved = null
     error = null
     requestId = crypto.randomUUID()
     if (full) {
@@ -82,8 +163,15 @@
     }
   }
 
-  const amountValid = $derived(Number(amount) > 0)
-  const canSubmit = $derived(!submitting && !!occurredOn && amountValid)
+  // Enough to post, not everything the server checks. A required box being empty is the client's
+  // to catch; whether the account holds the cash or the shares is the server's. See
+  // "No client-side blocking" in the spec -- every refusal comes from the ledger.
+  const complete = $derived(
+    shape === 'trade'
+      ? !!ticker.trim() && Number(quantity) > 0 && Number(unitPrice) > 0
+      : Number(amount) > 0,
+  )
+  const canSubmit = $derived(!submitting && !!occurredOn && complete)
 
   /** A back-dated posting invalidates every snapshot from its date forward.
    *
@@ -107,7 +195,19 @@
       // Sending the naive local datetime keeps the calendar date the user typed.
       occurred_at: `${occurredOn}T00:00:00`,
     }
-    if (shape === 'cash') body.amount = amount.trim()
+    if (shape === 'trade') {
+      body.ticker = ticker.trim().toUpperCase()
+      body.quantity = quantity.trim()
+      body.unit_price = unitPrice.trim()
+    } else {
+      body.amount = amount.trim()
+      if (showTicker && ticker.trim()) body.ticker = ticker.trim().toUpperCase()
+    }
+    // Omitted rather than sent as "0": the server already defaults both, and an absent field is
+    // the honest way to say the entry carried no fee. A cash movement has neither box, so its
+    // stale values from a previous entry must never ride along.
+    if (shape === 'trade' && fee.trim()) body.fee = fee.trim()
+    if (shape !== 'cash' && tax.trim()) body.tax = tax.trim()
     if (memo.trim()) body.memo = memo.trim()
     return body
   }
@@ -175,9 +275,11 @@
           <span class="hint faint">The date the transaction happened, not today.</span>
         </label>
 
-        {#if shape === 'cash'}
+        {#if shape !== 'trade'}
           <label class="field">
-            <span class="label">Amount ({portfolio.base_currency})</span>
+            <span class="label">
+              {shape === 'income' ? 'Gross amount' : 'Amount'} ({portfolio.base_currency})
+            </span>
             <!-- `inputmode` rather than `type="number"`: a number input hands back a JS number
                  and rounds what it cannot represent. The value stays a string end to end. -->
             <input
@@ -199,10 +301,106 @@
         {/if}
       </div>
 
+      {#if showTicker}
+        <label class="field wide">
+          <span class="label">
+            Instrument {#if shape !== 'trade'}<span class="faint">(optional)</span>{/if}
+          </span>
+          <input
+            type="text"
+            bind:value={ticker}
+            onblur={resolveTicker}
+            placeholder="AAPL"
+            autocapitalize="characters"
+            spellcheck="false"
+            aria-invalid={!!fieldError('ticker')}
+          />
+          <!-- Every line below is advisory. The name confirms the symbol is the company the
+               user meant, which is the one mistake the server cannot catch: a typo that
+               resolves to a real but different company posts cleanly. -->
+          {#if resolving}
+            <span class="hint faint">Resolving…</span>
+          {:else if resolved}
+            <span class="hint faint">{resolved.name} · {resolved.currency}</span>
+          {:else if unresolved}
+            <span class="hint warn">
+              {unresolved} could not be resolved. It may be delisted or misspelled — posting will
+              still be attempted.
+            </span>
+          {/if}
+          {#if currencyWarning}
+            <span class="hint warn">{currencyWarning}</span>
+          {/if}
+          {#if fieldError('ticker')}
+            <span class="negative msg">{fieldError('ticker')}</span>
+          {/if}
+        </label>
+      {/if}
+
+      {#if shape === 'trade'}
+        <div class="row">
+          <label class="field">
+            <span class="label">Quantity</span>
+            <input
+              type="text"
+              inputmode="decimal"
+              bind:value={quantity}
+              placeholder="0"
+              aria-invalid={!!fieldError('quantity')}
+              required
+            />
+            {#if fieldError('quantity')}
+              <span class="negative msg">{fieldError('quantity')}</span>
+            {/if}
+          </label>
+
+          <label class="field">
+            <span class="label">Unit price ({portfolio.base_currency})</span>
+            <input type="text" inputmode="decimal" bind:value={unitPrice} placeholder="0.00" required />
+            <span class="hint faint">The price actually executed, not today's quote.</span>
+          </label>
+        </div>
+      {/if}
+
+      {#if shape === 'trade' || shape === 'income'}
+        <div class="row">
+          {#if shape === 'trade'}
+            <label class="field">
+              <span class="label">Fee <span class="faint">(optional)</span></span>
+              <input type="text" inputmode="decimal" bind:value={fee} placeholder="0.00" />
+              <span class="hint faint">Capitalizes into cost basis.</span>
+            </label>
+          {/if}
+
+          <label class="field">
+            <span class="label">
+              {shape === 'income' ? 'Withholding tax' : 'Tax'} <span class="faint">(optional)</span>
+            </span>
+            <input type="text" inputmode="decimal" bind:value={tax} placeholder="0.00" />
+            <span class="hint faint">
+              {shape === 'income'
+                ? 'Deducted from the gross amount above; the account receives the net.'
+                : 'Capitalizes into cost basis.'}
+            </span>
+          </label>
+        </div>
+      {/if}
+
       <label class="field wide">
         <span class="label">Memo <span class="faint">(optional)</span></span>
         <input type="text" bind:value={memo} maxlength="200" />
       </label>
+
+      <!-- One computed line, deliberately not a leg table. It catches a misplaced decimal
+           before it reaches a ledger whose only correction is a reversal dated today. -->
+      {#if effect !== null}
+        <p class="effect">
+          <span class="label">Cash effect</span>
+          <span class="num" class:negative={effect < 0}>
+            {exactMoney(String(effect), portfolio.base_currency)}
+          </span>
+        </p>
+      {/if}
 
       {#if error && error.field === null}
         <p class="negative msg">{error.message}</p>
@@ -339,6 +537,26 @@
     color: var(--text);
     background: var(--surface);
     border: 1px solid var(--border-strong);
+  }
+
+  /* Advisory, not a refusal. `--warning` rather than `--negative`: the entry can still post,
+     and colouring it as an error would teach the reader to ignore the real ones. */
+  .warn {
+    color: var(--warning);
+  }
+
+  /* The one computed figure on the form, so it reads as a statement rather than another box. */
+  .effect {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    max-width: 460px;
+    margin: 0;
+    padding: 8px 10px;
+    font-size: 14px;
+    background: var(--surface-sunken);
+    border-radius: var(--radius-sm);
   }
 
   .stale {

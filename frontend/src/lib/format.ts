@@ -16,6 +16,20 @@ export function money(value: string | null | undefined, currency: string): strin
 }
 
 /**
+ * Money at the currency's own precision, for a figure whose decimals are the point.
+ *
+ * `money` rounds to whole units, which is right for a total read at a glance and wrong for the
+ * record form's cash-effect preview: that line exists to catch a misplaced decimal, and a
+ * formatter that drops the decimals cannot show one.
+ */
+export function exactMoney(value: string | null | undefined, currency: string): string {
+  if (value == null) return '—'
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return '—'
+  return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(parsed)
+}
+
+/**
  * Money for a tight slot (a donut hole, a stat tile): 1.2M rather than 1,234,567. The exact
  * figure must stay readable elsewhere on screen -- this trades precision for fit.
  */

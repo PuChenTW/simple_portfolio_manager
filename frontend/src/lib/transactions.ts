@@ -76,6 +76,90 @@ export function acceptsTicker(type: TransactionType): boolean {
   return shapeFor(type) === 'trade' || type === 'dividend'
 }
 
+/** The entry fields the cash effect reads, exactly as typed. */
+export type Entry = {
+  type: TransactionType
+  amount?: string
+  quantity?: string
+  unitPrice?: string
+  fee?: string
+  tax?: string
+  settlementAmount?: string
+}
+
+/** An empty box means zero, not unknown. A box holding nonsense means unknown. */
+function num(value: string | undefined): number {
+  if (value === undefined || value.trim() === '') return 0
+  return Number(value)
+}
+
+/** Whether every figure the caller needs actually parsed. */
+function usable(...values: number[]): boolean {
+  return values.every((value) => Number.isFinite(value))
+}
+
+/**
+ * The cash this entry will move, or null when the entry cannot say yet.
+ *
+ * This is a second implementation of `build_legs`' arithmetic, and the only one in TypeScript.
+ * It is *not* a leg preview: it computes the settlement figure and nothing else, because a full
+ * preview would duplicate more of `build_legs` and the copy would drift. Its job is to catch a
+ * misplaced decimal before it reaches a ledger where the only correction is a reversal that
+ * lands on today's date.
+ *
+ * Floats are acceptable here and nowhere else in this feature. The figure is read by a human as
+ * a sanity check and is never sent -- every value on the wire stays the string the user typed.
+ *
+ * The signs follow `postings.py`. Costs are *added* to what a buy pays and *subtracted* from
+ * what a sell receives, because a fee capitalizes into basis either way.
+ */
+export function cashEffect(entry: Entry): number | null {
+  // A supplied settlement wins, exactly as it does in `build_legs`. The preview must state what
+  // will be posted, not what would have been posted without it.
+  if (entry.settlementAmount !== undefined && entry.settlementAmount.trim() !== '') {
+    const supplied = Number(entry.settlementAmount)
+    return Number.isFinite(supplied) ? supplied : null
+  }
+
+  const fee = num(entry.fee)
+  const tax = num(entry.tax)
+
+  if (shapeFor(entry.type) === 'trade') {
+    const quantity = Number(entry.quantity)
+    const unitPrice = Number(entry.unitPrice)
+    if (!entry.quantity?.trim() || !entry.unitPrice?.trim()) return null
+    if (!usable(quantity, unitPrice, fee, tax)) return null
+
+    const consideration = quantity * unitPrice
+    const costs = fee + tax
+    return entry.type === 'buy' ? -(consideration + costs) : consideration - costs
+  }
+
+  if (!entry.amount?.trim()) return null
+  const amount = Number(entry.amount)
+  if (!usable(amount, tax)) return null
+
+  switch (entry.type) {
+    case 'deposit':
+    case 'transfer_in':
+      return amount
+    case 'withdrawal':
+    case 'transfer_out':
+    case 'fee':
+    case 'tax':
+      // A fee or tax event is a plain outflow. The `tax` field is withholding on income and has
+      // no part here -- counting it would charge the same money twice.
+      return -amount
+    case 'dividend':
+    case 'interest':
+      // `_income_legs` credits `gross - tax`: income is recorded gross with the withholding
+      // split out, and only the net ever reaches the account.
+      return amount - tax
+    default:
+      return null
+  }
+}
+
 /** Which input a refusal belongs beside, or null for one that belongs to the whole form. */
 export type ErrorField = 'amount' | 'quantity' | 'ticker' | 'settlement_amount' | null
 
