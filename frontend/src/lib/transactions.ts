@@ -5,7 +5,7 @@
  * cash effect and a missing kind filter both survive inspection.
  */
 
-import { ApiError } from './api/client'
+import { ApiError, type PortfolioKind } from './api/client'
 
 /** The transaction types `record_transaction` accepts, in picker order.
  *
@@ -66,9 +66,37 @@ const POSITIONLESS_TYPES = TRANSACTION_TYPES.filter(
  * what it accepts. An unrecognized kind takes the positionless list rather than the full one: a
  * kind this client has not caught up with is a book it cannot interpret, and refusing to offer a
  * trade is the safe direction to be wrong in. See API version history 0.6.0.
+ *
+ * The `string & {}` half of the parameter type is what keeps both properties: the compiler still
+ * suggests and checks the known kinds, while a kind added to the API after this build stays
+ * accepted rather than becoming a type error at the call site.
  */
-export function typesForKind(kind: string): TransactionType[] {
+export function typesForKind(kind: PortfolioKind | (string & {})): TransactionType[] {
   return kind === 'investment' ? [...TRANSACTION_TYPES] : [...POSITIONLESS_TYPES]
+}
+
+/** What each type is called in the picker.
+ *
+ * `Record<TransactionType, string>` rather than a loose lookup, so adding a type to
+ * `TRANSACTION_TYPES` without labelling it fails the build instead of rendering the raw enum
+ * value. It lives beside `SHAPES` for the same reason: two parallel maps over one key set drift
+ * silently when they sit in different files.
+ *
+ * `interest` is labelled "Interest received" because that is what the event means -- it credits
+ * cash. Interest *charged* on a loan is a `fee`, and the form says so rather than renaming
+ * either: the type list is the server's vocabulary.
+ */
+export const TYPE_LABELS: Record<TransactionType, string> = {
+  buy: 'Buy',
+  sell: 'Sell',
+  deposit: 'Deposit',
+  withdrawal: 'Withdrawal',
+  transfer_in: 'Transfer in',
+  transfer_out: 'Transfer out',
+  dividend: 'Dividend',
+  interest: 'Interest received',
+  fee: 'Fee',
+  tax: 'Tax',
 }
 
 /** Whether this type may carry a ticker at all, before the account kind is considered. */
@@ -235,4 +263,18 @@ export function errorFor(err: unknown): ShownError {
   const known = err instanceof ApiError ? SENTENCES[err.code] : undefined
   if (known) return known
   return { field: null, message: err instanceof Error ? err.message : String(err) }
+}
+
+/** The date snapshots became stale, or null when nothing did.
+ *
+ * A posting or a reversal invalidates every snapshot from the *affected event's* date forward.
+ * For a reversal that is the original's date, not the reversal's own -- the reversal is dated
+ * today, but what it undid may not have been, and `replay.py` reads `occurred_at`.
+ *
+ * Null when the date is today: today has no stored snapshot to be wrong yet, so saying so would
+ * be a warning nobody can act on.
+ */
+export function staleFrom(occurredAt: string, todayIso: string): string | null {
+  const day = occurredAt.slice(0, 10)
+  return day < todayIso ? day : null
 }

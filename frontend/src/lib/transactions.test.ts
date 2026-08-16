@@ -5,6 +5,7 @@ import {
   cashEffect,
   errorFor,
   shapeFor,
+  staleFrom,
   typesForKind,
   TRANSACTION_TYPES,
 } from './transactions'
@@ -235,5 +236,26 @@ describe('cashEffect', () => {
   it('reports nothing when the amount is missing', () => {
     expect(cashEffect({ type: 'deposit' })).toBeNull()
     expect(cashEffect({ type: 'dividend', amount: '' })).toBeNull()
+  })
+})
+
+describe('staleFrom', () => {
+  it('reports the affected date when it is in the past', () => {
+    expect(staleFrom('2026-06-01T00:00:00', '2026-08-16')).toBe('2026-06-01')
+  })
+
+  // Today has no stored snapshot to be wrong yet, so a notice would be unactionable.
+  it('reports nothing for today', () => {
+    expect(staleFrom('2026-08-16T00:00:00', '2026-08-16')).toBeNull()
+  })
+
+  it('reports nothing for a future date', () => {
+    expect(staleFrom('2026-09-01T00:00:00', '2026-08-16')).toBeNull()
+  })
+
+  // A reversal is dated today but undoes an event that may not have been. The original's date
+  // is what snapshots went wrong from, so that is what the caller passes.
+  it('takes the date it is given, not the reversal date', () => {
+    expect(staleFrom('2026-06-01T09:48:05.860775Z', '2026-08-16')).toBe('2026-06-01')
   })
 })

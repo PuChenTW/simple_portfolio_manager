@@ -3,9 +3,12 @@
   import { router, type AccountTab } from '../../route.svelte'
   import type { Portfolio } from '../../api/client'
   import { shortDate } from '../../format'
+  import { staleFrom } from '../../transactions'
+  import { today } from '../../snapshots'
   import AccountHoldings from './AccountHoldings.svelte'
   import AccountTransactions from './AccountTransactions.svelte'
   import RecordTransaction from './RecordTransaction.svelte'
+  import StaleSnapshots from './StaleSnapshots.svelte'
   import AccountPerformance from './AccountPerformance.svelte'
   import AccountSettings from './AccountSettings.svelte'
   import ThemeToggle from '../ThemeToggle.svelte'
@@ -105,10 +108,7 @@
   let reversalStaleFrom = $state<string | null>(null)
 
   async function onReversed(originalOccurredAt: string): Promise<void> {
-    const day = originalOccurredAt.slice(0, 10)
-    const today = new Date()
-    const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
-    reversalStaleFrom = day < iso ? day : null
+    reversalStaleFrom = staleFrom(originalOccurredAt, today())
     await account.afterPosting()
   }
 </script>
@@ -173,11 +173,10 @@
           <RecordTransaction {portfolio} onposted={() => account.afterPosting()} />
 
           {#if reversalStaleFrom}
-            <p class="stale">
+            <StaleSnapshots from={reversalStaleFrom} {portfolioId}>
               That reversal undid an event dated {shortDate(reversalStaleFrom)}, so snapshots from
-              that date are now out of date. Rebuild them from the
-              <a href={router.account(portfolioId, 'settings')}>Snapshots panel</a> in Settings.
-            </p>
+              that date are now out of date.
+            </StaleSnapshots>
           {/if}
 
           {#if account.transactions.loading}
@@ -291,15 +290,6 @@
     outline: 2px solid var(--accent);
     outline-offset: -2px;
     border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-  }
-
-  .stale {
-    margin: 0;
-    padding: 8px 10px;
-    font-size: 12px;
-    background: var(--surface-sunken);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
   }
 
   .stack {

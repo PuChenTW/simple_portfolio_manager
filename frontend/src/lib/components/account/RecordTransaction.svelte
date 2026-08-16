@@ -1,15 +1,20 @@
 <script lang="ts">
+  import { tick } from 'svelte'
   import { api, type Portfolio, type TransactionCreate } from '../../api/client'
   import {
     acceptsTicker,
     cashEffect,
     errorFor,
     shapeFor,
+    staleFrom,
+    TYPE_LABELS,
     typesForKind,
     type ErrorField,
     type TransactionType,
   } from '../../transactions'
   import { exactMoney, shortDate } from '../../format'
+  import { today } from '../../snapshots'
+  import StaleSnapshots from './StaleSnapshots.svelte'
 
   let {
     portfolio,
@@ -114,14 +119,6 @@
         : cashEffect({ type, amount, settlementAmount }),
   )
 
-  /** `YYYY-MM-DD` in local time. `toISOString` shifts the date across a timezone boundary. */
-  function today(): string {
-    const now = new Date()
-    const month = String(now.getMonth() + 1).padStart(2, '0')
-    const day = String(now.getDate()).padStart(2, '0')
-    return `${now.getFullYear()}-${month}-${day}`
-  }
-
   // Bound to `occurred_at`, never `trade_date`. `replay.py` filters and orders on `occurred_at`
   // alone -- `trade_date` is display metadata that drives no valuation. A date collected into
   // `trade_date` would read as June in the table below and replay as today, which breaks
@@ -146,6 +143,15 @@
 
   function fieldError(field: ErrorField): string | null {
     return error && error.field === field ? error.message : null
+  }
+
+  /** Drop the last posting's confirmation once this entry stops being that posting.
+   *
+   * "Posted." and the stale-snapshot notice both describe the entry that just landed. Left up
+   * while the user starts a different one, the notice names a date no longer on screen -- which
+   * is the "warning nobody can act on" AGENTS.md warns teaches readers to ignore the rest. */
+  function clearConfirmation(): void {
+    postedOn = null
   }
 
   function toggle(): void {
@@ -192,7 +198,7 @@
    * not rebuild automatically -- a force rebuild replaces stored valuations, which is why
    * `AccountSnapshots` gates it behind a second click naming how many.
    */
-  const staleFrom = $derived(postedOn && postedOn < today() ? postedOn : null)
+  const staleDate = $derived(postedOn ? staleFrom(postedOn, today()) : null)
 
   function payload(): TransactionCreate {
     const body: TransactionCreate = {
@@ -239,7 +245,10 @@
       // Type and date survive: the next line of a statement usually shares both.
       reset(false)
       await onposted()
-      amountInput?.focus()
+      // `tick()` because `reset` re-renders the fields: without it the focus call lands on the
+      // node Svelte is about to replace, and a burst of statement entries needs the mouse again.
+      await tick()
+      firstField()?.focus()
     } catch (err) {
       error = errorFor(err)
       // A refusal shown inside a collapsed disclosure is a refusal nobody sees.
@@ -249,20 +258,17 @@
     }
   }
 
+  // Each shape's first box. Both are needed because only one is rendered at a time: a single
+  // binding on the amount input is `null` on the trade shape -- the shape with the most fields
+  // to fill, and so the one that needs the focus return most.
   let amountInput: HTMLInputElement | null = $state(null)
+  let tickerInput: HTMLInputElement | null = $state(null)
 
-  const TYPE_LABELS: Record<string, string> = {
-    buy: 'Buy',
-    sell: 'Sell',
-    deposit: 'Deposit',
-    withdrawal: 'Withdrawal',
-    transfer_in: 'Transfer in',
-    transfer_out: 'Transfer out',
-    dividend: 'Dividend',
-    interest: 'Interest received',
-    fee: 'Fee',
-    tax: 'Tax',
+  /** The first field of whichever shape is showing, so a burst of entries never needs a mouse. */
+  function firstField(): HTMLInputElement | null {
+    return shape === 'trade' ? tickerInput : amountInput
   }
+
 </script>
 
 <section class="card">
@@ -278,9 +284,15 @@
       <!-- The type comes first because it decides every field below it. -->
       <label class="field">
         <span class="label">Type</span>
-        <select bind:value={type} onchange={() => (error = null)}>
+        <select
+          bind:value={type}
+          onchange={() => {
+            error = null
+            clearConfirmation()
+          }}
+        >
           {#each types as option (option)}
-            <option value={option}>{TYPE_LABELS[option] ?? option}</option>
+            <option value={option}>{TYPE_LABELS[option]}</option>
           {/each}
         </select>
       </label>
@@ -288,7 +300,7 @@
       <div class="row">
         <label class="field">
           <span class="label">Date</span>
-          <input type="date" bind:value={occurredOn} required />
+          <input type="date" bind:value={occurredOn} onchange={clearConfirmation} required />
           <span class="hint faint">The date the transaction happened, not today.</span>
         </label>
 
@@ -324,6 +336,7 @@
             Instrument {#if shape !== 'trade'}<span class="faint">(optional)</span>{/if}
           </span>
           <input
+            bind:this={tickerInput}
             type="text"
             bind:value={ticker}
             onblur={resolveTicker}
@@ -414,6 +427,9 @@
         </p>
       {/if}
 
+      <!-- Not in the spec's field table, kept because the ledger already has a Memo column
+           reading `event.memo`. Without a way to write one it could only ever show a
+           `source_reference`, which is a different fact wearing the same column. -->
       <label class="field wide">
         <span class="label">Memo <span class="faint">(optional)</span></span>
         <input type="text" bind:value={memo} maxlength="200" />
@@ -477,12 +493,11 @@
         {/if}
       </div>
 
-      {#if staleFrom}
-        <p class="stale">
-          Snapshots from {shortDate(staleFrom)} are now out of date. Rebuild them from the
-          <a href="#/account/{portfolio.id}/settings">Snapshots panel</a> in Settings so
-          performance reflects this entry.
-        </p>
+      {#if staleDate}
+        <StaleSnapshots from={staleDate} portfolioId={portfolio.id}>
+          Snapshots from {shortDate(staleDate)} are now out of date, so performance does not yet
+          reflect this entry.
+        </StaleSnapshots>
       {/if}
     </form>
   {/if}
@@ -640,15 +655,6 @@
     padding: 8px 10px;
     font-size: 14px;
     background: var(--surface-sunken);
-    border-radius: var(--radius-sm);
-  }
-
-  .stale {
-    margin: 0;
-    padding: 8px 10px;
-    font-size: 12px;
-    background: var(--surface-sunken);
-    border: 1px solid var(--border);
     border-radius: var(--radius-sm);
   }
 </style>
