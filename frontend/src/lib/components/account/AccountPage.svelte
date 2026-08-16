@@ -4,6 +4,7 @@
   import type { Portfolio } from '../../api/client'
   import AccountHoldings from './AccountHoldings.svelte'
   import AccountTransactions from './AccountTransactions.svelte'
+  import RecordTransaction from './RecordTransaction.svelte'
   import AccountPerformance from './AccountPerformance.svelte'
   import AccountSettings from './AccountSettings.svelte'
   import ThemeToggle from '../ThemeToggle.svelte'
@@ -148,18 +149,26 @@
           <AccountHoldings summary={account.summary.data} />
         {/if}
       {:else if current === 'transactions'}
-        {#if account.transactions.loading}
-          <div class="placeholder" aria-busy="true">Loading transactions…</div>
-        {:else if account.transactions.error}
-          <p class="state error">{account.transactions.error}</p>
-        {:else if account.transactions.data}
-          <AccountTransactions
-            page={account.transactions.data}
-            offset={account.offset}
-            currency={portfolio.base_currency}
-            onpage={(offset) => account.loadTransactions(offset)}
-          />
-        {/if}
+        <!-- The form sits above the ledger rather than in a modal: the table below is the
+             confirmation that a posting landed, so the two share one viewport. It renders
+             independently of the ledger's load state, since a failed page read is no reason to
+             refuse a posting. -->
+        <div class="stack">
+          <RecordTransaction {portfolio} onposted={() => account.afterPosting()} />
+
+          {#if account.transactions.loading}
+            <div class="placeholder" aria-busy="true">Loading transactions…</div>
+          {:else if account.transactions.error}
+            <p class="state error">{account.transactions.error}</p>
+          {:else if account.transactions.data}
+            <AccountTransactions
+              page={account.transactions.data}
+              offset={account.offset}
+              currency={portfolio.base_currency}
+              onpage={(offset) => account.loadTransactions(offset)}
+            />
+          {/if}
+        </div>
       {:else if current === 'performance'}
         {#if account.performance.loading}
           <div class="placeholder" aria-busy="true">Reading snapshots…</div>
@@ -256,6 +265,12 @@
     outline: 2px solid var(--accent);
     outline-offset: -2px;
     border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  }
+
+  .stack {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
   }
 
   .placeholder {

@@ -212,6 +212,24 @@ export class AccountState {
   applyIdentity(portfolio: Portfolio): void {
     this.identity = { data: portfolio, loading: false, error: null }
   }
+
+  /** Re-read what a new posting invalidated, and nothing else.
+   *
+   * The ledger reloads at page 0, because that is where a new event lands and the row appearing
+   * is the confirmation that it posted.
+   *
+   * `summary` is dropped rather than refetched: valuing holdings costs a quote per ticker, and
+   * paying that for a tab nobody is looking at is the cost `ensureSummary` exists to avoid. The
+   * next visit fetches it.
+   *
+   * `performance` is left alone deliberately. Its snapshots are genuinely stale until someone
+   * rebuilds them, and refetching would redraw the same wrong numbers with more confidence. The
+   * form says so in words instead, and points at the rebuild.
+   */
+  async afterPosting(): Promise<void> {
+    this.summary = idle()
+    await this.loadTransactions(0)
+  }
 }
 
 export const account = new AccountState()

@@ -22,6 +22,28 @@ export type Performance = Schemas['PerformanceRead']
 export type NavHistory = Schemas['NavHistoryRead']
 export type SnapshotSummary = Schemas['SnapshotSummary']
 export type Rebuild = Schemas['RebuildRead']
+export type JournalEventDetail = Schemas['JournalEventDetail']
+export type MarketInstrument = Schemas['MarketInstrumentRead']
+export type EventType = Schemas['EventType']
+
+/** One posting request, with every monetary field narrowed to a string.
+ *
+ * The generated `TransactionCreate` types these as `number | string`, because Pydantic accepts
+ * both. This app must send only the string: a JS number reaches the ledger as
+ * `0.30000000000000004`, and the repo's `Decimal` rule exists to prevent exactly that. Narrowing
+ * here makes the compiler refuse a float rather than leaving it to review.
+ */
+export type TransactionCreate = Omit<
+  Schemas['TransactionCreate'],
+  'quantity' | 'unit_price' | 'amount' | 'fee' | 'tax' | 'settlement_amount'
+> & {
+  quantity?: string
+  unit_price?: string
+  amount?: string
+  fee?: string
+  tax?: string
+  settlement_amount?: string
+}
 
 /** Every asset class the API defines, in taxonomy order.
  *
@@ -212,6 +234,48 @@ export const api = {
       end_date: endDate,
       force_revision: force,
     }),
+
+  /** Post one balanced event -- legs, position, and settlement cash -- in one transaction.
+   *
+   * `request_id` is a *parameter*, unlike `setAssetClass` which mints one per call. It is the
+   * only thing between a double-clicked submit and two postings: the server fingerprints the
+   * payload against the id and returns the event it already wrote instead of writing a second.
+   * So the caller holds one id for a form session and re-mints only after a success.
+   *
+   * Every monetary field is a string, never a number. `JSON.stringify` of a JS number puts
+   * `0.30000000000000004` on the wire, and Pydantic parses whatever it receives into the Decimal
+   * that lands in the ledger.
+   */
+  recordTransaction: (portfolioId: string, body: TransactionCreate) =>
+    post<JournalEventDetail>(
+      `portfolios/${encodeURIComponent(portfolioId)}/transactions`,
+      body,
+    ),
+
+  /** Undo a posted event by writing its mirror image; the original is marked, never deleted.
+   *
+   * The reversal is dated *now*, not on the original's `occurred_at`. Replay reads `occurred_at`,
+   * so reversing a June mistake in August leaves both months wrong -- a dated mistake needs a
+   * dated adjustment. Any caller must say so before posting one.
+   */
+  reverseTransaction: (
+    portfolioId: string,
+    eventId: string,
+    body: { request_id: string; memo?: string },
+  ) =>
+    post<JournalEventDetail>(
+      `portfolios/${encodeURIComponent(portfolioId)}/transactions/${encodeURIComponent(eventId)}/reversal`,
+      body,
+    ),
+
+  /** Resolve a ticker to its canonical name and quote currency.
+   *
+   * Used by the record form on blur. The currency is the reason: comparing it to the account's
+   * base currency turns a post-submit `currency_mismatch` 422 into a pre-submit fact, out of a
+   * request that is already being made.
+   */
+  marketInstrument: (ticker: string) =>
+    get<MarketInstrument>(`market/instruments/${encodeURIComponent(ticker)}`),
 
   /** Rename an account or record who holds it. Currency and kind are fixed at creation. */
   updatePortfolio: (portfolioId: string, body: { name?: string; institution?: string }) =>
