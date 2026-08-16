@@ -2,6 +2,7 @@
   import { account } from '../../account.svelte'
   import { router, type AccountTab } from '../../route.svelte'
   import type { Portfolio } from '../../api/client'
+  import { shortDate } from '../../format'
   import AccountHoldings from './AccountHoldings.svelte'
   import AccountTransactions from './AccountTransactions.svelte'
   import RecordTransaction from './RecordTransaction.svelte'
@@ -95,6 +96,21 @@
     onchange()
     location.hash = router.dashboard()
   }
+
+  /** The date a reversal invalidated snapshots from, or null when nothing needs saying.
+   *
+   * A reversal is dated today, but it undoes an event that may not have been. Replay reads
+   * `occurred_at`, so every snapshot from the *original's* date forward is now wrong -- the same
+   * situation a back-dated posting creates, and it needs the same notice. */
+  let reversalStaleFrom = $state<string | null>(null)
+
+  async function onReversed(originalOccurredAt: string): Promise<void> {
+    const day = originalOccurredAt.slice(0, 10)
+    const today = new Date()
+    const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+    reversalStaleFrom = day < iso ? day : null
+    await account.afterPosting()
+  }
 </script>
 
 <div class="page">
@@ -156,6 +172,14 @@
         <div class="stack">
           <RecordTransaction {portfolio} onposted={() => account.afterPosting()} />
 
+          {#if reversalStaleFrom}
+            <p class="stale">
+              That reversal undid an event dated {shortDate(reversalStaleFrom)}, so snapshots from
+              that date are now out of date. Rebuild them from the
+              <a href={router.account(portfolioId, 'settings')}>Snapshots panel</a> in Settings.
+            </p>
+          {/if}
+
           {#if account.transactions.loading}
             <div class="placeholder" aria-busy="true">Loading transactions…</div>
           {:else if account.transactions.error}
@@ -164,8 +188,10 @@
             <AccountTransactions
               page={account.transactions.data}
               offset={account.offset}
+              portfolioId={portfolio.id}
               currency={portfolio.base_currency}
               onpage={(offset) => account.loadTransactions(offset)}
+              onreversed={onReversed}
             />
           {/if}
         </div>
@@ -265,6 +291,15 @@
     outline: 2px solid var(--accent);
     outline-offset: -2px;
     border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  }
+
+  .stale {
+    margin: 0;
+    padding: 8px 10px;
+    font-size: 12px;
+    background: var(--surface-sunken);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
   }
 
   .stack {

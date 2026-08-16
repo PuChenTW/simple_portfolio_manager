@@ -1,18 +1,24 @@
 <script lang="ts">
-  import type { JournalEvent, JournalEventPage } from '../../api/client'
+  import { api, type JournalEvent, type JournalEventPage } from '../../api/client'
   import { PAGE_SIZE } from '../../account.svelte'
+  import { errorFor } from '../../transactions'
   import { money, quantity, shortDate } from '../../format'
 
   let {
     page,
     offset,
+    portfolioId,
     currency,
     onpage,
+    onreversed,
   }: {
     page: JournalEventPage
     offset: number
+    portfolioId: string
     currency: string
     onpage: (offset: number) => void
+    /** A reversal posted. The page reloads the ledger and drops the stale summary. */
+    onreversed: (originalOccurredAt: string) => Promise<void>
   } = $props()
 
   /** Legs arrive inline, so expanding a row costs no request. */
@@ -30,12 +36,55 @@
   // A reversal and a reversed event are both still posted; neither is deleted. Showing the
   // relationship is the whole point of an audit trail -- a row that reads as an ordinary trade
   // while having been undone is the one thing this table must not do.
+  //
+  // `status` is checked as well as the page's own reversal links, because a reversal that landed
+  // on a different page leaves no link here to find. The event itself always knows.
   const reversedIds = $derived(
     new Set(page.items.map((e) => e.reverses_event_id).filter((id): id is string => !!id)),
   )
 
+  function isUndone(event: JournalEvent): boolean {
+    return event.status === 'reversed' || reversedIds.has(event.id)
+  }
+
   function label(event: JournalEvent): string {
     return event.event_type.replace(/_/g, ' ')
+  }
+
+  /** Which row is asking to be reversed, or null. One at a time: the confirmation names it. */
+  let confirming = $state<string | null>(null)
+  let reversing = $state<string | null>(null)
+  let reverseError = $state<{ id: string; message: string } | null>(null)
+
+  /** Whether the server would refuse the reversal outright, judged from what the row reports.
+   *
+   * `status` is the authority rather than scanning the page for a matching reversal: a reversal
+   * that landed on a later page would leave a reversed event still offering the action.
+   *
+   * A transfer half is *not* excluded here. `JournalEventRead` carries no `transfer_id`, so the
+   * client cannot tell one, and guessing would either hide the action from ordinary events or
+   * claim to know something it does not. The server refuses it with a written sentence instead. */
+  function reversible(event: JournalEvent): boolean {
+    return event.status !== 'reversed' && !event.reverses_event_id
+  }
+
+  async function reverse(event: JournalEvent): Promise<void> {
+    reversing = event.id
+    reverseError = null
+    try {
+      // Minted per reversal: undoing two different events is two mutations, and one key would
+      // make the second a silent replay of the first.
+      await api.reverseTransaction(portfolioId, event.id, { request_id: crypto.randomUUID() })
+      confirming = null
+      await onreversed(event.occurred_at)
+    } catch (err) {
+      // `already_reversed`, `cannot_reverse_a_reversal`, and `reverse_the_transfer_instead` all
+      // land here as written sentences. The row guards the first two, but the server is the
+      // authority -- another tab may have reversed this event a moment ago.
+      reverseError = { id: event.id, message: errorFor(err).message }
+    } finally {
+      reversing = null
+    }
   }
 </script>
 
@@ -61,6 +110,7 @@
           <th scope="col">Instrument</th>
           <th scope="col">Memo</th>
           <th scope="col" class="right">Cash</th>
+          <th scope="col" class="right"><span class="visually-hidden">Actions</span></th>
         </tr>
       </thead>
       <tbody>
@@ -68,7 +118,7 @@
           {@const legs = event.legs ?? []}
           {@const cashLeg = legs.find((leg) => leg.leg_type === 'cash')}
           {@const tickers = [...new Set(legs.map((l) => l.ticker).filter(Boolean))]}
-          {@const undone = reversedIds.has(event.id)}
+          {@const undone = isUndone(event)}
           <tr class="event" class:voided={undone || !!event.reverses_event_id}>
             <td class="chevron-col">
               <button
@@ -99,11 +149,63 @@
                 ? '—'
                 : money(cashLeg.amount_delta, cashLeg.currency)}
             </td>
+            <td class="right actions-col">
+              {#if reversible(event)}
+                <button
+                  type="button"
+                  class="link"
+                  onclick={() => {
+                    confirming = confirming === event.id ? null : event.id
+                    reverseError = null
+                  }}
+                >
+                  Reverse
+                </button>
+              {/if}
+            </td>
           </tr>
+
+          {#if confirming === event.id}
+            <tr class="confirm">
+              <td colspan="7">
+                <div class="confirm-body">
+                  <!-- The date is the whole reason this confirmation has prose. Replay reads
+                       `occurred_at`, so a reversal dated today does not undo a June event *in
+                       June* -- both months end up wrong. Someone reaching for undo has to learn
+                       that here, not afterwards. -->
+                  <p class="warn-text">
+                    Reversing this {label(event)} posts an opposing event dated
+                    <strong>today</strong>, not {shortDate(event.occurred_at)}. The original stays
+                    in the ledger, marked reversed.
+                  </p>
+                  <p class="muted small">
+                    Both dates then hold a balance nobody intended. To correct a dated mistake,
+                    post a dated adjustment instead.
+                  </p>
+                  <div class="confirm-actions">
+                    <button
+                      type="button"
+                      class="destructive"
+                      disabled={reversing === event.id}
+                      onclick={() => reverse(event)}
+                    >
+                      {reversing === event.id ? 'Reversing…' : 'Post the reversal'}
+                    </button>
+                    <button type="button" class="quiet" onclick={() => (confirming = null)}>
+                      Cancel
+                    </button>
+                    {#if reverseError && reverseError.id === event.id}
+                      <span class="negative small">{reverseError.message}</span>
+                    {/if}
+                  </div>
+                </div>
+              </td>
+            </tr>
+          {/if}
 
           {#if expanded[event.id]}
             <tr class="legs">
-              <td colspan="6">
+              <td colspan="7">
                 <!-- Every leg, unnetted. The balance is the point: a reader checking a posting
                      needs to see the sides sum, not a summary that already assumed they do. -->
                 <table class="inner">
@@ -147,7 +249,7 @@
           {/if}
         {:else}
           <tr>
-            <td colspan="6" class="empty muted">
+            <td colspan="7" class="empty muted">
               No transactions posted to this account yet.
             </td>
           </tr>
@@ -308,6 +410,94 @@
     word-break: break-all;
   }
 
+  .actions-col {
+    width: 1%;
+    white-space: nowrap;
+  }
+
+  /* A quiet text button. Reversing is a posting, not a delete, so it does not wear the
+     destructive styling until the confirmation actually asks for it. */
+  .link {
+    padding: 2px 6px;
+    font: inherit;
+    font-size: 12px;
+    color: var(--text-muted);
+    background: none;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+
+  .link:hover {
+    color: var(--text);
+    border-color: var(--border-strong);
+  }
+
+  /* The table is `white-space: nowrap` and scrolls inside `.scroll`, so a cell's content sets
+     the table's width. Prose here would therefore widen the *table* instead of wrapping, and a
+     table wider than the viewport pushes the whole page sideways. Pinning the confirmation to
+     the scroll container's own width keeps it wrapping and keeps the page from scrolling. */
+  .confirm > td {
+    padding: 12px 8px 14px 36px;
+    background: var(--warning-soft);
+    white-space: normal;
+  }
+
+  .confirm-body {
+    width: min(62ch, 100%);
+    max-width: calc(100vw - 6rem);
+  }
+
+  .warn-text {
+    margin: 0 0 6px;
+    font-size: 13px;
+  }
+
+  .small {
+    font-size: 12px;
+  }
+
+  .confirm .muted {
+    margin: 0 0 10px;
+  }
+
+  .confirm-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .confirm-actions button {
+    padding: 6px 12px;
+    font: inherit;
+    font-size: 13px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+
+  .destructive {
+    color: var(--negative);
+    background: var(--surface);
+    border: 1px solid var(--negative);
+  }
+
+  .destructive:not(:disabled):hover {
+    color: #fff;
+    background: var(--negative);
+  }
+
+  .destructive:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .quiet {
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+  }
+
   .pager {
     display: flex;
     justify-content: flex-end;
@@ -337,8 +527,13 @@
     padding: 20px;
   }
 
+  /* `left: 0` is load-bearing, not decoration. With no positioned ancestor these anchor to the
+     initial containing block, so one inside the rightmost column sits at the table's own right
+     edge -- past the viewport, extending the *document* even though `.scroll` clips the table.
+     The page then scrolls sideways with nothing visible to scroll to. */
   .visually-hidden {
     position: absolute;
+    left: 0;
     width: 1px;
     height: 1px;
     overflow: hidden;
