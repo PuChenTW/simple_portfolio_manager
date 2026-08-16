@@ -24,7 +24,7 @@
 
   // Tabs of one account, in the order they are usually needed: what is held, how it got there,
   // how it did, and only then how it is labelled.
-  const TABS: { id: AccountTab; label: string }[] = [
+  const ALL_TABS: { id: AccountTab; label: string }[] = [
     { id: 'holdings', label: 'Holdings' },
     { id: 'transactions', label: 'Transactions' },
     { id: 'performance', label: 'Performance' },
@@ -35,16 +35,28 @@
     account.open(portfolioId)
   })
 
+  const portfolio = $derived(account.portfolio)
+
+  // A cash account earns no rate of return worth reporting: its balance moves by deposits and
+  // withdrawals, which TWR neutralizes as external flows. The tab held one line of text saying
+  // so, which is a tab that can never say anything else.
+  const tabs = $derived(
+    portfolio?.kind === 'cash' ? ALL_TABS.filter((t) => t.id !== 'performance') : ALL_TABS,
+  )
+
+  // A bookmarked `#/account/<id>/performance` outlives the tab. Fall back to the first tab
+  // rather than rendering an empty panel under a tablist with nothing selected.
+  const current = $derived(tabs.some((t) => t.id === tab) ? tab : 'holdings')
+
   // A tab fetches when it is first shown, not when the page loads. Valuing holdings costs a
   // quote per ticker and performance reads a year of snapshots -- paying for all four on arrival
   // would make every visit as slow as the slowest tab.
   $effect(() => {
-    if (tab === 'holdings') account.ensureSummary()
-    else if (tab === 'transactions') account.ensureTransactions()
-    else if (tab === 'performance') account.ensurePerformance()
+    if (current === 'holdings') account.ensureSummary()
+    else if (current === 'transactions') account.ensureTransactions()
+    else if (current === 'performance') account.ensurePerformance()
   })
 
-  const portfolio = $derived(account.portfolio)
   // A cash or liability account holds no securities, so its "holdings" tab is a balance. The
   // label follows the kind rather than pretending every book is a brokerage account.
   const holdingsLabel = $derived(
@@ -64,8 +76,8 @@
     if (!delta) return
     event.preventDefault()
 
-    const index = TABS.findIndex((t) => t.id === tab)
-    const next = TABS[(index + delta + TABS.length) % TABS.length]
+    const index = tabs.findIndex((t) => t.id === current)
+    const next = tabs[(index + delta + tabs.length) % tabs.length]
     location.hash = router.account(portfolioId, next.id)
 
     const list = (event.currentTarget as HTMLElement).parentElement
@@ -112,13 +124,13 @@
          reload. The roving tabindex and arrow keys live on the tabs themselves, since they are
          what receives focus. -->
     <div class="tabs" role="tablist" aria-label="Account sections">
-      {#each TABS as item (item.id)}
+      {#each tabs as item (item.id)}
         <a
           role="tab"
           href={router.account(portfolioId, item.id)}
-          class:current={tab === item.id}
-          aria-selected={tab === item.id}
-          tabindex={tab === item.id ? 0 : -1}
+          class:current={current === item.id}
+          aria-selected={current === item.id}
+          tabindex={current === item.id ? 0 : -1}
           onkeydown={onKeydown}
         >
           {item.id === 'holdings' ? holdingsLabel : item.label}
@@ -127,7 +139,7 @@
     </div>
 
     <div class="panel" role="tabpanel">
-      {#if tab === 'holdings'}
+      {#if current === 'holdings'}
         {#if account.summary.loading}
           <div class="placeholder" aria-busy="true">Valuing holdings…</div>
         {:else if account.summary.error}
@@ -135,7 +147,7 @@
         {:else if account.summary.data}
           <AccountHoldings summary={account.summary.data} />
         {/if}
-      {:else if tab === 'transactions'}
+      {:else if current === 'transactions'}
         {#if account.transactions.loading}
           <div class="placeholder" aria-busy="true">Loading transactions…</div>
         {:else if account.transactions.error}
@@ -148,7 +160,7 @@
             onpage={(offset) => account.loadTransactions(offset)}
           />
         {/if}
-      {:else if tab === 'performance'}
+      {:else if current === 'performance'}
         {#if account.performance.loading}
           <div class="placeholder" aria-busy="true">Reading snapshots…</div>
         {:else if account.performance.error}
@@ -164,7 +176,7 @@
             onrange={(start, end) => account.setRange(start, end)}
           />
         {/if}
-      {:else if tab === 'settings'}
+      {:else if current === 'settings'}
         <AccountSettings {portfolio} onsaved={onSaved} ondeleted={onDeleted} />
       {/if}
     </div>
