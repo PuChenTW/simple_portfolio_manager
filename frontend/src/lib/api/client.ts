@@ -58,14 +58,16 @@ export class ApiError extends Error {
   }
 }
 
-// The API lives one level above this app: the page is served at `<root>/v2/`, the API at
-// `<root>/api/v1/`. Resolving against `../` keeps every request relative to wherever the app is
-// mounted, so a prefix-stripping proxy and a direct load both reach the same API. An absolute
-// `/api/v1/` would work only at the domain root -- the exact bug docs/ARCHITECTURE.md records.
+// Relative, with no leading slash and no `../`. The app is served at the same root as the API --
+// the page at `<root>/`, the API at `<root>/api/v1/` -- so resolving against `document.baseURI`
+// reaches the API wherever the app is mounted. A prefix-stripping proxy and a direct load both
+// work. An absolute `/api/v1/` would work only at the domain root, which is the exact bug
+// docs/ARCHITECTURE.md records.
 //
-// In dev, Vite serves the app at `/` and proxies `/api`, so `../api/v1/` would escape the root.
-// import.meta.env.DEV picks the right base at build time.
-const API_ROOT = import.meta.env.DEV ? 'api/v1/' : '../api/v1/'
+// This was `../api/v1/` while the app was served one level down at `<root>/v2/`. Promoting it to
+// the root made that one level too high: harmless at a domain root, where `../` cannot climb past
+// `/`, and wrong under a proxy that mounts the app below one.
+const API_ROOT = 'api/v1/'
 
 function apiUrl(path: string): URL {
   return new URL(API_ROOT + path, document.baseURI)

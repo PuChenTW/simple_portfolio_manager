@@ -3,13 +3,13 @@ import { svelte } from '@sveltejs/vite-plugin-svelte'
 
 // `base: './'` is load-bearing, not cosmetic. Tailscale Serve strips its path prefix before
 // forwarding and sends no X-Forwarded-Prefix, so a proxied request is byte-identical to a direct
-// one at the app. Relative asset URLs are the only thing that lets one build serve both
-// `/static/v2/` and `/portfolio/static/v2/`. See docs/ARCHITECTURE.md, "Sub-path deployment".
+// one at the app. Relative asset URLs are the only thing that lets one build serve both `/` and
+// `/portfolio/`. See docs/ARCHITECTURE.md, "Sub-path deployment".
 export default defineConfig({
   plugins: [svelte()],
   base: './',
   build: {
-    outDir: '../src/portfolio_manager/static/v2',
+    outDir: '../src/portfolio_manager/static',
     emptyOutDir: true,
   },
   server: {

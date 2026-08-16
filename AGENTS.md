@@ -125,8 +125,8 @@ idempotency, stale-quote warnings, and machine-readable errors.
 
 - Run `uv run pytest` and `uv run ruff check .` before submitting.
 - Dashboard changes must be verified with Playwright against the running service, not by
-  inspection — `static/` is plain HTML, CSS, and vanilla JS with no build step and no external
-  libraries, so nothing catches a broken selector but a browser. Say which widths you checked.
+  inspection. Run `bun run check` and `bun run build` in `frontend/` first: the served page is
+  build output, so an unbuilt edit tests the previous version. Say which widths you checked.
 - A `docker compose` stack may already be running against real portfolio data. Check
   `docker compose ps` before assuming ports are free, and prefer a separate `PORTFOLIO_DB_PATH`
   and non-default port for manual testing.

@@ -21,9 +21,11 @@ uv run portfolio-manager
 The server listens on `http://127.0.0.1:8001`. OpenAPI documentation is available at
 `http://127.0.0.1:8001/docs`. The service remains bound to loopback only.
 
-The read-only Traditional Chinese dashboard at `http://127.0.0.1:8001/` has four tabs: current
-holdings, historical performance (NAV series with TWR and XIRR), data quality (classification
-provenance and the journal), and the cross-currency consolidated total. It never changes data.
+The dashboard at `http://127.0.0.1:8001/` opens on the group summary — net worth, composition,
+holdings, then accounts — and drills into a single account for its holdings, transactions, and
+performance. A classification view resolves holdings the provider left `unclassified`. The
+dashboard is built from `frontend/` and is absent until you build it. The API serves every
+endpoint either way. See `frontend/README.md`.
 
 Set `PORTFOLIO_DB_PATH` to choose the SQLite database file. Quote data is fresh for 300 seconds
 while its market is open; override that with `PORTFOLIO_QUOTE_TTL_SECONDS`. Once the market

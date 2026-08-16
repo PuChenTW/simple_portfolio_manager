@@ -1,14 +1,14 @@
-# Dashboard v2
+# Dashboard
 
-A Svelte 5 + TypeScript rewrite of the dashboard, served at `/v2` alongside the original at `/`.
-Both run against the same API; the old page is untouched until this one replaces it.
+The dashboard: Svelte 5 and TypeScript, served at `/`. It replaced a vanilla-JS page that lived
+in `src/portfolio_manager/static/`, so that whole directory is now this project's build output.
 
 ## Commands
 
 - `bun install` — install dependencies.
 - `bun run dev` — dev server with hot reload, proxying `/api` to `PORTFOLIO_API_URL`
   (default `http://127.0.0.1:8003`).
-- `bun run build` — build into `src/portfolio_manager/static/v2/`, where FastAPI serves it.
+- `bun run build` — build into `src/portfolio_manager/static/`, where FastAPI serves it.
 - `bun run check` — typecheck Svelte and TypeScript.
 - `bun run types` — regenerate `src/lib/api/schema.d.ts` from a running API.
 
@@ -24,9 +24,9 @@ an `undefined` at runtime. Regenerate whenever the API version changes; never ha
 ## Two rules that are easy to break
 
 **Every URL stays relative.** Assets build with `base: './'` and API calls resolve against
-`../api/v1/` from the page's own directory. This is the same mechanism as the v1 page's
-`<base href="./">`: Tailscale Serve strips its path prefix and sends no `X-Forwarded-Prefix`, so
-a proxied request is byte-identical to a direct one and no server-side prefix config can work.
+`../api/v1/` from the page's own directory. Tailscale Serve strips its path prefix and sends no
+`X-Forwarded-Prefix`, so a proxied request is byte-identical to a direct one at the app, and no
+server-side prefix config can tell them apart.
 One absolute path silently breaks whichever deployment it was not written for. `test_api.py`
 asserts every emitted asset path starts with `./`.
 

@@ -180,35 +180,13 @@ def test_delete_portfolio_succeeds_with_applied_corporate_actions_and_reversals(
     assert harness.client.get(f"/api/v1/portfolios/{portfolio_id}").status_code == 404
 
 
-def test_dashboard_and_static_assets_are_available_without_changing_openapi(harness) -> None:
-    dashboard = harness.client.get("/")
-    assert dashboard.status_code == 200
-    assert dashboard.headers["content-type"].startswith("text/html")
-    assert 'id="portfolio-select"' in dashboard.text
-    assert 'src="static/dashboard.js"' in dashboard.text
-    # Must stay relative: an absolute base breaks either direct or sub-path access.
-    assert '<base href="./">' in dashboard.text
-    # The delete control and every id its handler queries; a renamed id would
-    # otherwise fail silently in the browser.
-    for node_id in (
-        "delete-button",
-        "delete-dialog",
-        "delete-form",
-        "delete-dialog-target",
-        "delete-dialog-scale",
-        "delete-confirm-name",
-        "delete-dialog-error",
-        "delete-cancel",
-        "delete-submit",
-    ):
-        assert f'id="{node_id}"' in dashboard.text
+def test_dashboard_mount_does_not_appear_in_openapi(harness) -> None:
+    """The root mount serves a page, not an operation, and must not enter the API contract.
 
-    stylesheet = harness.client.get("/static/dashboard.css")
-    script = harness.client.get("/static/dashboard.js")
-    assert stylesheet.status_code == script.status_code == 200
-    assert "summary-grid" in stylesheet.text
-    assert "loadDashboard" in script.text
-
+    Asserted separately from the page itself because this holds whether or not `frontend/` has
+    been built -- and a mount that leaked into the schema would add an operation the
+    compatibility baseline never froze.
+    """
     assert "/" not in harness.client.get("/openapi.json").json()["paths"]
 
 
@@ -558,17 +536,17 @@ def test_openapi_is_self_describing_for_agents(harness) -> None:
     )
 
 
-def test_v2_dashboard_is_served_with_relative_assets(harness) -> None:
-    """The built Svelte dashboard mounts at /v2 with paths that survive a stripping proxy.
+def test_dashboard_is_served_at_the_root_with_relative_assets(harness) -> None:
+    """The built dashboard answers `/` with paths that survive a prefix-stripping proxy.
 
     Skipped when `frontend/` has not been built, since the mount is conditional on the build
     output existing -- a developer who has not run `bun run build` still gets a working API.
     """
-    built = FilePath(api.__file__).parent / "static" / "v2" / "index.html"
+    built = FilePath(api.__file__).parent / "static" / "index.html"
     if not built.is_file():
         pytest.skip("frontend/ has not been built; run `bun run build` in frontend/")
 
-    page = harness.client.get("/v2/")
+    page = harness.client.get("/")
     assert page.status_code == 200
     assert page.headers["content-type"].startswith("text/html")
 
@@ -578,7 +556,12 @@ def test_v2_dashboard_is_served_with_relative_assets(harness) -> None:
     assert assets, "built page referenced no assets"
     assert all(path.startswith("./") for path in assets), assets
 
-    # Bare /v2 must reach the same page, or the relative paths resolve one directory too high.
-    redirect = harness.client.get("/v2", follow_redirects=False)
-    assert redirect.status_code in (301, 307, 308)
-    assert redirect.headers["location"].endswith("/v2/")
+    # Every asset the page names must actually resolve, or the root mount is serving HTML whose
+    # bundle 404s -- a blank page that still returns 200.
+    for path in assets:
+        asset = harness.client.get(f"/{path.removeprefix('./')}")
+        assert asset.status_code == 200, path
+
+    # The mount must not shadow the API. A prefix match at "/" would swallow every route.
+    assert harness.client.get("/api/v1/portfolios").status_code == 200
+    assert harness.client.get("/health").status_code == 200

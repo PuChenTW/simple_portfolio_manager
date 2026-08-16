@@ -14,7 +14,8 @@ CLAUDE.local.md
 .claude
 .agents
 
-# Frontend build output and dependencies. The built dashboard is a build artifact, produced by
-# `bun run build` in frontend/ and baked into the image at Docker build time.
+# Frontend build output and dependencies. The whole static/ directory is a build artifact now,
+# produced by `bun run build` in frontend/ and baked into the image at Docker build time. The
+# app serves every endpoint without it, so a fresh checkout runs before the frontend is built.
 node_modules/
-src/portfolio_manager/static/v2/
+src/portfolio_manager/static/

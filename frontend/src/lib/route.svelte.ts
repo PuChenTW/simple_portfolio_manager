@@ -5,7 +5,7 @@
  * sends no `X-Forwarded-Prefix`, which makes a proxied request byte-identical to a direct one --
  * so path-based routes would need a base the app cannot discover. See docs/ARCHITECTURE.md,
  * "Sub-path deployment". A hash needs no base at all: `#/classify` means the same thing at
- * `localhost:8001/static/v2/` and at `example.com/portfolio/static/v2/`.
+ * `localhost:8001/` and at `example.com/portfolio/`.
  */
 
 /** Which page is on screen. An account page also carries the id it is showing. */

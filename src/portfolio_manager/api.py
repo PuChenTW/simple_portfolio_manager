@@ -6,7 +6,7 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, Path, Query, Request, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
@@ -319,7 +319,6 @@ app = FastAPI(
 )
 
 STATIC_DIR = FilePath(__file__).parent / "static"
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 _fastapi_openapi = app.openapi
 
@@ -331,37 +330,6 @@ def agent_friendly_openapi():
 
 
 app.openapi = agent_friendly_openapi
-
-
-_DASHBOARD_HTML = (STATIC_DIR / "index.html").read_text()
-
-
-@app.get("/", include_in_schema=False)
-def dashboard() -> HTMLResponse:
-    """Serve the local, read-only portfolio dashboard.
-
-    Served verbatim. The page carries a relative <base href="./">, so its asset and API paths
-    resolve against whatever URL the browser loaded -- the app needs no deployment prefix
-    config, and a proxied request is byte-identical to a direct one anyway.
-    """
-    return HTMLResponse(_DASHBOARD_HTML)
-
-
-_V2_DIR = STATIC_DIR / "v2"
-
-# The Svelte dashboard, built by `frontend/`. Mounted at the path it is served from rather than
-# under /static, because its assets are relative (`./assets/...`) and therefore resolve against
-# the document's own directory -- serving the HTML at /v2/ while the files live at /static/v2/
-# makes every asset 404. Mounting both at /v2/ keeps them together, and `html=True` serves
-# index.html for the directory and redirects /v2 to /v2/.
-#
-# The relative paths are the same mechanism as the v1 page's <base href="./">: one build serves
-# the domain root and a prefix-stripping proxy alike. See docs/ARCHITECTURE.md.
-#
-# The directory is absent until the frontend is built, and a missing directory would crash the
-# app at import time rather than serve a stale page.
-if _V2_DIR.is_dir():
-    app.mount("/v2", StaticFiles(directory=_V2_DIR, html=True), name="dashboard-v2")
 
 
 _market_provider = build_provider(YahooMarketProvider())
@@ -2212,3 +2180,19 @@ def get_consolidated_summary(
         calculation_method=summary.calculation_method,
         warnings=summary.warnings,
     )
+
+
+# The dashboard, built from `frontend/` by Vite. It mounts last, and at the root, because a mount
+# matches by prefix and would shadow every route declared after it -- so this must stay the final
+# statement in the module.
+#
+# Its asset paths are relative (`./assets/...`) and resolve against the document's own URL, so one
+# build serves the domain root and a prefix-stripping proxy alike. Never rewrite them to absolute
+# paths: that breaks whichever deployment it was not written for. See docs/ARCHITECTURE.md,
+# "Sub-path deployment".
+#
+# `html=True` serves index.html for the root. The directory is absent until the frontend is built,
+# and mounting a missing one crashes the app at import time -- so an API-only build, and a
+# checkout that has never run `bun run build`, still serve every endpoint.
+if STATIC_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="dashboard")

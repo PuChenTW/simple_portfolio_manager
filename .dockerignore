@@ -13,5 +13,5 @@ frontend/node_modules
 frontend/dist
 # Built by the `frontend` stage inside the image. Sending a local build would let a stale
 # dashboard win over the one this image just built.
-src/portfolio_manager/static/v2
+src/portfolio_manager/static
 .playwright-mcp

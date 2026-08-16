@@ -240,12 +240,38 @@ copied, so a source edit rebuilds in about a second instead of resyncing every d
 `COPY src` below that step — moving it above ties the whole dependency install to every source
 change.
 
+## The dashboard mount
+
+The dashboard is a Svelte build from `frontend/`, and `src/portfolio_manager/static/` is now
+entirely its output — gitignored, produced by `bun run build`, and baked into the image by the
+`frontend` Docker stage. It replaced a hand-written HTML page that was served by a route reading
+a file at import time. Two things about the replacement are load-bearing.
+
+**The mount is the last statement in `api.py`.** A Starlette mount matches by prefix, so one at
+`/` shadows every route declared after it. Nothing in the file guards this — a new endpoint
+appended below the mount would return the dashboard's HTML instead, with no error anywhere. The
+comment there says so, because the failure is invisible in review and invisible in the tests that
+target the endpoints declared above it.
+
+**The mount is conditional on the directory existing.** Mounting a missing directory raises at
+import time, so a checkout that has never run `bun run build` would fail to start the API at all.
+Making it conditional keeps the two artifacts independent: the service is an API that happens to
+ship a dashboard, and a build without one still answers every endpoint. `test_api.py` skips its
+page assertions when the build is absent for the same reason.
+
+There is no `/v2`. The Svelte app was served there while the old page held `/`, and promoting it
+moved it to the root rather than keeping both. One dashboard, one URL — a redirect would have
+been a second name for the same page, kept alive for bookmarks that only ever existed on one
+developer's machine.
+
 ## Sub-path deployment
 
-The app has no URL-prefix setting, and must not grow one. A relative `<base href="./">` in
-`static/index.html` is the entire mechanism: the browser resolves it against the document's own
-URL, so assets load from `/static/…` at the domain root and `/portfolio/static/…` under a proxy
-that mounts the app at `/portfolio`, without the server knowing which happened.
+The app has no URL-prefix setting, and must not grow one. Relative asset URLs are the entire
+mechanism: Vite builds the dashboard with `base: './'`, so the browser resolves every path
+against the document's own URL. Assets load from `/assets/…` at the domain root and
+`/portfolio/assets/…` under a proxy that mounts the app at `/portfolio`, without the server
+knowing which happened. The app's own routes are hashes for the same reason — a fragment never
+reaches the server, so it needs no base either.
 
 That is not a stylistic preference. Tailscale Serve's `--set-path` **strips the prefix before
 forwarding** and sends no `X-Forwarded-Prefix` — measured with a header-probe server behind a
@@ -262,4 +288,5 @@ Its companion `StripPrefixMiddleware` never ran at all: it stripped a prefix tha
 
 The corollary for anyone editing the dashboard: keep every asset and API path relative, and never
 hardcode a leading `/`. One absolute path silently reintroduces the bug for one of the two
-deployments. `test_api.py` asserts the `<base href>` stays `./`.
+deployments. `test_api.py` asserts every asset path the built page emits starts with `./`, and
+that each one resolves — a page whose bundle 404s still answers 200.
