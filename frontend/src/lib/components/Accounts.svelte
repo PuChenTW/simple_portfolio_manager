@@ -1,5 +1,6 @@
 <script lang="ts">
-  import type { ConsolidatedSummary, Portfolio, PortfolioKind } from '../api/client'
+  import { api, type ConsolidatedSummary, type Portfolio, type PortfolioKind } from '../api/client'
+  import { money } from '../format'
   import { router } from '../route.svelte'
 
   let {
@@ -8,6 +9,31 @@
   }: { portfolios: Portfolio[]; summary: ConsolidatedSummary | null } = $props()
 
   const memberIds = $derived(new Set(summary?.portfolio_ids ?? []))
+  let accountValues = $state<Record<string, string | null>>({})
+
+  // The group summary cannot be split back into accounts: cash is aggregated by currency and
+  // conversion failures are deliberately left unresolved. Ask the existing account endpoint for
+  // each server-computed total instead of reconstructing a number in the browser.
+  $effect(() => {
+    const accounts = portfolios
+    let active = true
+    accountValues = {}
+
+    for (const portfolio of accounts) {
+      void api.portfolioSummary(portfolio.id).then(
+        (value) => {
+          if (active) accountValues[portfolio.id] = value.total_value
+        },
+        () => {
+          if (active) accountValues[portfolio.id] = null
+        },
+      )
+    }
+
+    return () => {
+      active = false
+    }
+  })
 
   // An unknown kind is a book this client cannot interpret; it must not default to `investment`.
   // See docs/ARCHITECTURE.md, API version history 0.6.0.
@@ -38,15 +64,28 @@
     <ul>
       {#each section.items as p (p.id)}
         <li class:outside={!memberIds.has(p.id)}>
-          <!-- The whole row is the link: an account name is the natural way into its own page,
-               and a separate affordance would be one more thing to find. -->
-          <a class="name" href={router.account(p.id)}>{p.name}</a>
-          <span class="meta faint">
-            {p.base_currency}{p.institution ? ` · ${p.institution}` : ''}
+          <span class="identity">
+            <a class="name" href={router.account(p.id)}>{p.name}</a>
+            <span class="meta faint">
+              {p.base_currency}{p.institution ? ` · ${p.institution}` : ''}
+            </span>
           </span>
-          {#if !memberIds.has(p.id)}
-            <span class="tag" title="Not part of the selected group">outside group</span>
-          {/if}
+          <span class="measure">
+            {#if !memberIds.has(p.id)}
+              <span class="tag" title="Not part of the selected group">outside group</span>
+            {/if}
+            <span
+              class="amount num"
+              class:negative={Number(accountValues[p.id]) < 0}
+              title={p.kind === 'investment' ? 'Account value' : 'Account balance'}
+            >
+              {#if accountValues[p.id] === undefined}
+                <span class="faint" aria-label="Loading account value">…</span>
+              {:else}
+                {money(accountValues[p.id], p.base_currency)}
+              {/if}
+            </span>
+          </span>
         </li>
       {/each}
     </ul>
@@ -91,10 +130,10 @@
   }
 
   li {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: baseline;
-    gap: 8px;
-    flex-wrap: wrap;
+    gap: 12px;
     padding: 7px 0;
     border-bottom: 1px solid var(--border);
     font-size: 13px;
@@ -122,7 +161,25 @@
   }
 
   .meta {
+    margin-left: 4px;
     font-size: 12px;
+  }
+
+  .identity {
+    min-width: 0;
+  }
+
+  .measure {
+    display: flex;
+    align-items: baseline;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .amount {
+    min-width: 7ch;
+    text-align: right;
+    white-space: nowrap;
   }
 
   .outside .name {
@@ -135,7 +192,6 @@
   }
 
   .tag {
-    margin-left: auto;
     padding: 1px 7px;
     border: 1px dashed var(--border-strong);
     border-radius: 999px;
