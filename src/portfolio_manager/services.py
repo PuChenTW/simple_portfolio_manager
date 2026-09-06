@@ -75,7 +75,7 @@ def get_portfolio(session: Session, portfolio_id: str) -> Portfolio:
     return portfolio
 
 
-def _first_event_dates(session: Session, portfolio_ids: list[str]) -> dict[str, date]:
+def first_event_dates(session: Session, portfolio_ids: list[str]) -> dict[str, date]:
     """Earliest event date per portfolio, for the whole page in one query.
 
     A per-row `MIN` would make listing cost a query per portfolio, which is the same N+1 that
@@ -96,12 +96,12 @@ def _first_event_dates(session: Session, portfolio_ids: list[str]) -> dict[str, 
 
 def portfolio_payload(session: Session, portfolio: Portfolio) -> PortfolioRead:
     """Serialize one portfolio, resolving where its history starts."""
-    return _portfolio_payload(portfolio, _first_event_dates(session, [portfolio.id]))
+    return _portfolio_payload(portfolio, first_event_dates(session, [portfolio.id]))
 
 
 def portfolio_payloads(session: Session, portfolios: list[Portfolio]) -> list[PortfolioRead]:
     """Serialize a list, resolving every portfolio's first event date in one query."""
-    dates = _first_event_dates(session, [portfolio.id for portfolio in portfolios])
+    dates = first_event_dates(session, [portfolio.id for portfolio in portfolios])
     return [_portfolio_payload(portfolio, dates) for portfolio in portfolios]
 
 

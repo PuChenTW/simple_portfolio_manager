@@ -86,6 +86,10 @@ class FxService:
         self.provider = provider
         self.lookback_days = lookback_days
         self._failed: set[tuple[str, str]] = set()
+        # Ranges already fetched in full by `prefetch_range`, so a date inside one is known to
+        # have every bar the provider has. Without this, a weekend or a holiday inside the range
+        # looks to `_observed` like a cache that fell short and triggers a refetch per date.
+        self._covered: dict[tuple[str, str], tuple[date, date]] = {}
 
     def convert(
         self, base: str, quote: str, as_of: date
@@ -195,6 +199,11 @@ class FxService:
         stored = self._stored(base, quote, as_of)
         if stored is not None and _aware(stored.price_as_of).date() >= as_of:
             return stored
+        if self._is_covered(base, quote, as_of):
+            # The range was fetched whole, so no bar exists for this date -- a weekend, a
+            # holiday, or a pair that simply does not trade daily. Refetching cannot produce
+            # one, and doing it per date turns a series into thousands of identical requests.
+            return stored
         if (base, quote) not in self._failed:
             self._fetch(base, quote, as_of)
             refreshed = self._stored(base, quote, as_of)
@@ -203,6 +212,10 @@ class FxService:
         # Nothing newer is available: an older stored rate is still better than no answer, and
         # the staleness it carries is reported to the caller.
         return stored
+
+    def _is_covered(self, base: str, quote: str, as_of: date) -> bool:
+        window = self._covered.get((base, quote))
+        return window is not None and window[0] <= as_of <= window[1]
 
     def _stored(self, base: str, quote: str, as_of: date) -> FxRate | None:
         return self.session.scalar(
@@ -217,13 +230,42 @@ class FxService:
             .limit(1)
         )
 
-    def _fetch(self, base: str, quote: str, as_of: date) -> None:
+    def prefetch_range(self, base: str, quote: str, start_date: date, end_date: date) -> None:
+        """Store a pair's whole history for a range, so a series resolves without refetching.
+
+        `_observed` fetches a 30-day window around the date it is asked for, which is right for
+        one report and ruinous for a thousand: valuing a three-year series day by day would ask
+        the provider once per day for the same pair. This fetches the span once up front. It
+        stores rates and returns nothing -- every conversion still goes through `convert`, so a
+        date this call could not cover behaves exactly as it would have without it.
+        """
+        pairs = [(base, quote)]
+        # A cross needs both legs, and the intermediary is only known once a direct pair fails.
+        # Seeding them costs two requests and saves the per-date fetches a cross would trigger.
+        for middle in CROSS_CURRENCIES:
+            if middle in {base, quote}:
+                continue
+            pairs.append((base, middle))
+            pairs.append((middle, quote))
+
+        for first, second in pairs:
+            self._fetch(first, second, end_date, start_date=start_date)
+            self._covered[(first, second)] = (start_date, end_date)
+            # A pair with no history over the whole range is not proof it cannot be resolved for
+            # a single date, and this is only an optimisation. Leaving it in `_failed` would let
+            # a failed prefetch suppress the per-date fetch that would have succeeded.
+            self._failed.discard((first, second))
+
+    def _fetch(
+        self, base: str, quote: str, as_of: date, *, start_date: date | None = None
+    ) -> None:
         """Ask the provider for a pair's history and store every bar it returns."""
         symbol = f"{base}{quote}=X"
+        begin = start_date if start_date is not None else as_of - timedelta(days=self.lookback_days)
         try:
             result = self.provider.history(
                 symbol,
-                start_date=as_of - timedelta(days=self.lookback_days),
+                start_date=begin,
                 end_date=as_of,
             )
         except MarketDataError:

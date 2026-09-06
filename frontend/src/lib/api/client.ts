@@ -20,6 +20,9 @@ export type JournalEvent = Schemas['JournalEventRead']
 export type JournalLeg = Schemas['JournalLegRead']
 export type Performance = Schemas['PerformanceRead']
 export type NavHistory = Schemas['NavHistoryRead']
+export type NavSeries = Schemas['NavSeriesRead']
+export type NavSeriesPoint = Schemas['NavSeriesPointRead']
+export type AccountEntry = Schemas['AccountEntryRead']
 export type SnapshotSummary = Schemas['SnapshotSummary']
 export type Rebuild = Schemas['RebuildRead']
 export type JournalEventDetail = Schemas['JournalEventDetail']
@@ -176,6 +179,19 @@ export const api = {
   groupSummary: (groupId: string) =>
     get<ConsolidatedSummary>(`portfolio-groups/${encodeURIComponent(groupId)}/summary`),
   listPortfolios: () => get<Portfolio[]>('portfolios'),
+
+  /** The group's net worth over time, fetched whole.
+   *
+   * No date parameters: the range picker filters what is already here, so switching from 1Y to
+   * All is a view change rather than a round trip. The whole series for three years of daily
+   * snapshots is a few hundred KB, which is cheaper once than a request per range change.
+   *
+   * The points sum the group's *current* members across all of their history, so the line rises
+   * where an account's records begin. Anything rendering it must surface
+   * `contributing_account_count` -- see docs/adr/0001-nav-series-uses-current-membership.md.
+   */
+  groupNavSeries: (groupId: string) =>
+    get<NavSeries>(`portfolio-groups/${encodeURIComponent(groupId)}/nav-history`),
 
   // --- One account -----------------------------------------------------------------------
   //

@@ -39,6 +39,7 @@ from .identity import (
 from .journal import LegType, PortfolioKind, derived_flow
 from .market import HistoryAdjustment, HistoryInterval, MarketProvider, YahooMarketProvider
 from .models import Portfolio, PortfolioGroup
+from .nav_series import build_nav_series
 from .performance import (
     TWR_METHOD_DESCRIPTION,
     XIRR_METHOD_DESCRIPTION,
@@ -56,6 +57,7 @@ from .postings import (
     ticker_index,
 )
 from .schemas import (
+    AccountEntryRead,
     BalanceRead,
     CacheClearRead,
     CashAccountCreate,
@@ -89,6 +91,8 @@ from .schemas import (
     LiabilityAccountCreate,
     MarketInstrumentRead,
     NavHistoryRead,
+    NavSeriesPointRead,
+    NavSeriesRead,
     PerformanceCoverageRead,
     PerformanceRead,
     PortfolioCreate,
@@ -312,7 +316,7 @@ AGENT_SKILL_METADATA = {
 
 app = FastAPI(
     title="Local Portfolio Manager",
-    version="0.9.0",
+    version="0.10.0",
     summary="Agent-friendly accounting for cash, stocks, and crypto portfolios",
     description=API_DESCRIPTION,
     openapi_tags=OPENAPI_TAGS,
@@ -2184,6 +2188,112 @@ def get_consolidated_summary(
         ],
         calculation_method=summary.calculation_method,
         warnings=summary.warnings,
+    )
+
+
+@app.get(
+    "/api/v1/portfolio-groups/{group_id}/nav-history",
+    response_model=NavSeriesRead,
+    operation_id="get_consolidated_nav_history",
+    summary="Read a group's value over time",
+    response_description="One converted point per date, with what each point covers",
+    tags=["consolidation"],
+)
+def get_consolidated_nav_history(
+    group_id: GroupId,
+    session: SessionDep,
+    provider: ProviderDep,
+    start_date: Annotated[
+        date | None,
+        Query(description="First date, inclusive. Omit to start at the earliest snapshot."),
+    ] = None,
+    end_date: Annotated[
+        date | None,
+        Query(description="Last date, inclusive. Omit to end at the latest snapshot."),
+    ] = None,
+    reporting_currency: Annotated[
+        str | None, Query(description="Override the group's own reporting currency.")
+    ] = None,
+) -> NavSeriesRead:
+    """
+    Chart what the group has been worth, day by day.
+
+    Each date sums the stored snapshots of the group's members and converts them at that date's
+    rate. This reads snapshots and never creates them, so a date without one is reported in
+    `missing_dates` rather than interpolated. Build them with `rebuild_valuation_snapshots` first
+    if the series needs to be complete.
+
+    Read `contributing_account_count` on a point before comparing it with another. This series
+    charts the group's **current** members across the whole history of their data, so it rises
+    when an account's records begin -- a climb that is indistinguishable from a gain unless the
+    count and `account_entries` are read alongside it. That differs on purpose from
+    `get_consolidated_summary`, which honours effective-dated membership and reports nothing at
+    all for a date before the group was assembled; the two can disagree for the same past date.
+    """
+    series = build_nav_series(
+        session,
+        group_id,
+        provider,
+        start_date=start_date,
+        end_date=end_date,
+        reporting_currency=reporting_currency,
+    )
+    return NavSeriesRead(
+        group_id=series.group_id,
+        group_name=series.group_name,
+        reporting_currency=series.reporting_currency,
+        start_date=series.start_date,
+        end_date=series.end_date,
+        portfolio_ids=series.portfolio_ids,
+        points=[
+            NavSeriesPointRead(
+                valuation_date=point.valuation_date,
+                securities_value=point.securities_value,
+                cash_value=point.cash_value,
+                assets_value=point.assets_value,
+                liabilities_value=point.liabilities_value,
+                net_value=point.net_value,
+                contributing_account_count=point.contributing_account_count,
+                converted_value_coverage_percent=point.converted_value_coverage_percent,
+                status=point.status,
+                unconverted=[
+                    UnconvertedAmountRead(
+                        currency=item.currency, amount=item.amount, reason=item.reason
+                    )
+                    for item in point.unconverted
+                ],
+                missing_portfolio_ids=point.missing_portfolio_ids,
+            )
+            for point in series.points
+        ],
+        account_entries=[
+            AccountEntryRead(
+                portfolio_id=item.portfolio_id,
+                portfolio_name=item.portfolio_name,
+                entered_on=item.entered_on,
+            )
+            for item in series.account_entries
+        ],
+        calculation_version=series.calculation_version,
+        calculation_method=series.calculation_method,
+        total_account_count=series.total_account_count,
+        partial_points=series.partial_points,
+        missing_dates=series.missing_dates,
+        fx_rates_used=[
+            FxRateRead(
+                base_currency=item.base_currency,
+                quote_currency=item.quote_currency,
+                rate=item.rate,
+                method=item.method,
+                conversion_path=item.conversion_path,
+                price_as_of=item.price_as_of,
+                provider=item.provider,
+                is_stale=item.is_stale,
+                warnings=item.warnings,
+            )
+            for item in series.fx_rates_used
+        ],
+        warnings=series.warnings,
     )
 
 

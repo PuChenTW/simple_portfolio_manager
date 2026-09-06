@@ -856,10 +856,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/portfolio-groups/{group_id}/nav-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a group's value over time
+         * @description Chart what the group has been worth, day by day.
+         *
+         *     Each date sums the stored snapshots of the group's members and converts them at that date's
+         *     rate. This reads snapshots and never creates them, so a date without one is reported in
+         *     `missing_dates` rather than interpolated. Build them with `rebuild_valuation_snapshots` first
+         *     if the series needs to be complete.
+         *
+         *     Read `contributing_account_count` on a point before comparing it with another. This series
+         *     charts the group's **current** members across the whole history of their data, so it rises
+         *     when an account's records begin -- a climb that is indistinguishable from a gain unless the
+         *     count and `account_entries` are read alongside it. That differs on purpose from
+         *     `get_consolidated_summary`, which honours effective-dated membership and reports nothing at
+         *     all for a date before the group was assembled; the two can disagree for the same past date.
+         */
+        get: operations["get_consolidated_nav_history"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AccountEntryRead
+         * @description The date an account's data begins, where the series changes what it measures.
+         */
+        AccountEntryRead: {
+            /** Portfolio Id */
+            portfolio_id: string;
+            /** Portfolio Name */
+            portfolio_name: string;
+            /**
+             * Entered On
+             * Format: date
+             */
+            entered_on: string;
+        };
         /**
          * ActionType
          * @description Corporate action vocabulary.
@@ -1989,6 +2036,117 @@ export interface components {
             missing_dates: string[];
             /** Partial Snapshots */
             partial_snapshots: number;
+            /** Warnings */
+            warnings: string[];
+        };
+        /**
+         * NavSeriesPointRead
+         * @description One date on the consolidated series, in the reporting currency.
+         */
+        NavSeriesPointRead: {
+            /**
+             * Valuation Date
+             * Format: date
+             */
+            valuation_date: string;
+            /** Securities Value */
+            securities_value: string;
+            /** Cash Value */
+            cash_value: string;
+            /**
+             * Assets Value
+             * @description What the group owned on this date.
+             */
+            assets_value: string;
+            /**
+             * Liabilities Value
+             * @description What the group owed, negative so that `assets_value` + `liabilities_value` == `net_value`. Zero when no liability account had started by this date.
+             */
+            liabilities_value: string;
+            /**
+             * Net Value
+             * @description Assets less liabilities. This is the plotted line.
+             */
+            net_value: string;
+            /**
+             * Contributing Account Count
+             * @description How many accounts are inside this number, which is rarely every account in the group. Compare it with `total_account_count` before comparing two dates: a rise where this count changes is composition, not gain.
+             */
+            contributing_account_count: number;
+            /**
+             * Converted Value Coverage Percent
+             * @description Share of this date's value that reached the reporting currency.
+             */
+            converted_value_coverage_percent: string;
+            /**
+             * Status
+             * @description complete, or partial when this date is understated.
+             */
+            status: string;
+            /**
+             * Unconverted
+             * @description Value excluded from this point's totals rather than converted at a guess.
+             */
+            unconverted: components["schemas"]["UnconvertedAmountRead"][];
+            /**
+             * Missing Portfolio Ids
+             * @description Accounts that had started by this date but have no snapshot for it, so this point understates the group. Accounts that had not started yet are not listed.
+             */
+            missing_portfolio_ids: string[];
+        };
+        /**
+         * NavSeriesRead
+         * @description A group's value over time, with what each point covers.
+         *
+         *     The series sums the group's *current* members across their whole history, unlike
+         *     `get_consolidated_summary`, which honours effective-dated membership and therefore reports
+         *     nothing for a date before the group was assembled. The two endpoints answer different
+         *     questions and can disagree for the same past date.
+         */
+        NavSeriesRead: {
+            /** Group Id */
+            group_id: string;
+            /** Group Name */
+            group_name: string;
+            /** Reporting Currency */
+            reporting_currency: string;
+            /**
+             * Start Date
+             * Format: date
+             */
+            start_date: string;
+            /**
+             * End Date
+             * Format: date
+             */
+            end_date: string;
+            /** Portfolio Ids */
+            portfolio_ids: string[];
+            /** Points */
+            points: components["schemas"]["NavSeriesPointRead"][];
+            /**
+             * Account Entries
+             * @description When each account entered the series, oldest first. These are the dates where the line changes what it measures.
+             */
+            account_entries: components["schemas"]["AccountEntryRead"][];
+            /** Calculation Version */
+            calculation_version: string;
+            /** Calculation Method */
+            calculation_method: string;
+            /**
+             * Total Account Count
+             * @description Members in the group today, against which a point's count is read.
+             */
+            total_account_count: number;
+            /** Partial Points */
+            partial_points: number;
+            /**
+             * Missing Dates
+             * @description Dates in range with no snapshot for any member. Reported, never interpolated. Dates before the first account started are not gaps and are not listed.
+             */
+            missing_dates: string[];
+            /** Fx Rates Used */
+            fx_rates_used: components["schemas"]["FxRateRead"][];
             /** Warnings */
             warnings: string[];
         };
@@ -4654,6 +4812,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConsolidatedSummaryRead"];
+                };
+            };
+            /** @description Invalid request data or a violated portfolio rule; inspect `code`. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_consolidated_nav_history: {
+        parameters: {
+            query?: {
+                /** @description First date, inclusive. Omit to start at the earliest snapshot. */
+                start_date?: string | null;
+                /** @description Last date, inclusive. Omit to end at the latest snapshot. */
+                end_date?: string | null;
+                /** @description Override the group's own reporting currency. */
+                reporting_currency?: string | null;
+            };
+            header?: never;
+            path: {
+                /** @description Portfolio group UUID returned by `create_portfolio_group`. */
+                group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One converted point per date, with what each point covers */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NavSeriesRead"];
                 };
             };
             /** @description Invalid request data or a violated portfolio rule; inspect `code`. */

@@ -149,4 +149,4 @@ in the issue file. See @docs/agents/triage-labels.md.
 ### Domain docs
 
 Single-context: `CONTEXT.md` and `docs/adr/` at the repo root, both created lazily.
-`docs/ARCHITECTURE.md` carries the reasoning today. See @docs/agents/domain.md.
+See @docs/agents/domain.md.

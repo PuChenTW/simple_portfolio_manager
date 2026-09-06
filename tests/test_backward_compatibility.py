@@ -90,6 +90,25 @@ It is `null` for an account with no events rather than falling back to `created_
 different facts -- an imported account is recorded long after the transactions it holds -- and
 substituting one for the other would start a backfill at a plausible wrong date, which is the
 guess invariant 1 exists to refuse.
+
+0.10.0 added `get_consolidated_nav_history`: one operation, three models, one MCP tool. No frozen
+shape moved. It answers "how has my net worth changed" where `get_consolidated_summary` answers
+"what am I worth now", and it reads stored snapshots rather than replaying the journal per day --
+valuing a three-year range point by point through the summary path would replay every member
+portfolio once per date.
+
+It differs from `get_consolidated_summary` in one way that will surprise a reader, and the
+difference is deliberate. The summary honours effective-dated membership, so a report for a date
+before the group existed correctly contains nothing. A *series* built that way is flat zero
+across every year of history that preceded the group, which for a group assembled after years of
+trading hides the entire history it was asked to draw. This endpoint therefore charts the
+group's current members across the whole span of their data, and the two can disagree for the
+same past date. See docs/adr/0001-nav-series-uses-current-membership.md.
+
+That choice makes the series a sum over a changing set of accounts, so every point carries
+`contributing_account_count` and the response carries `account_entries`. Without them a rise
+where an account's records begin is indistinguishable from a gain. The summary needs no such
+field because one report covers one date and one membership.
 """
 
 import asyncio

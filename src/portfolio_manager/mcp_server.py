@@ -1000,6 +1000,46 @@ async def get_consolidated_summary(
     )
 
 
+@mcp.tool()
+async def get_consolidated_nav_history(
+    group_id: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    reporting_currency: str | None = None,
+) -> dict[str, Any]:
+    """Read a group's total value over time, converted into one currency.
+
+    This is the tool for "how has my net worth changed", where `get_consolidated_summary` answers
+    "what am I worth now". Dates are `YYYY-MM-DD` and inclusive; omit both to get the whole
+    history, which saves having to discover when it begins.
+
+    Read `contributing_account_count` on a point before comparing it with another point. The
+    series charts the group's *current* members across the whole history of their data, so the
+    line rises when an account's records begin -- and that rise is indistinguishable from a gain
+    unless the count is read with it. `account_entries` lists those dates. Never report a change
+    between two dates whose counts differ without saying that the accounts differ too.
+
+    This differs on purpose from `get_consolidated_summary`, which honours effective-dated
+    membership and reports nothing at all for a date before the group was assembled. The two can
+    disagree for the same past date, and neither is wrong.
+
+    It reads snapshots and never creates them: dates never built appear in `missing_dates` rather
+    than being interpolated. Call `rebuild_valuation_snapshots` on each member first when the
+    series must be complete. Check `partial_points` and each point's
+    `converted_value_coverage_percent` before quoting a figure.
+    """
+    params: dict[str, Any] = {}
+    if start_date is not None:
+        params["start_date"] = start_date
+    if end_date is not None:
+        params["end_date"] = end_date
+    if reporting_currency is not None:
+        params["reporting_currency"] = reporting_currency
+    return await _request(
+        "GET", f"/api/v1/portfolio-groups/{group_id}/nav-history", params=params
+    )
+
+
 # --- Resources --------------------------------------------------------------
 #
 # Tools describe one operation each. These describe the things an agent must know *before*

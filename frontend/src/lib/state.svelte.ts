@@ -1,4 +1,10 @@
-import { api, type ConsolidatedSummary, type Group, type Portfolio } from './api/client'
+import {
+  api,
+  type ConsolidatedSummary,
+  type Group,
+  type NavSeries,
+  type Portfolio,
+} from './api/client'
 
 const LAST_GROUP_KEY = 'portfolio.lastGroupId'
 
@@ -22,6 +28,11 @@ export class DashboardState {
   groups = $state<Group[]>([])
   portfolios = $state<Portfolio[]>([])
   summary = $state<ConsolidatedSummary | null>(null)
+  /** The value-over-time series. Loaded separately from the summary because it replays far more
+   *  data and must not hold the hero number off the screen while it does. */
+  series = $state<NavSeries | null>(null)
+  seriesLoading = $state(false)
+  seriesError = $state<string | null>(null)
   selectedGroupId = $state<string | null>(null)
   loading = $state(true)
   error = $state<string | null>(null)
@@ -110,6 +121,9 @@ export class DashboardState {
     if (!isSwitch) this.#startClock()
 
     const seq = ++this.#requestSeq
+    // Not awaited: the chart is slower than the summary and secondary to it, so blocking the
+    // hero number on it would trade the page's first paint for a widget below the fold.
+    void this.#loadSeries(groupId, seq)
     try {
       const summary = await api.groupSummary(groupId)
       if (seq !== this.#requestSeq) return // A newer switch already won; discard this response.
@@ -123,6 +137,24 @@ export class DashboardState {
         this.refreshing = false
         if (!isSwitch) this.#stopClock()
       }
+    }
+  }
+
+  async #loadSeries(groupId: string, seq: number): Promise<void> {
+    this.seriesLoading = true
+    this.seriesError = null
+    // Cleared rather than kept: a line belonging to the previous group, sitting under the new
+    // group's hero number, is worse than an empty frame that says it is loading.
+    this.series = null
+    try {
+      const series = await api.groupNavSeries(groupId)
+      if (seq !== this.#requestSeq) return
+      this.series = series
+    } catch (err) {
+      if (seq !== this.#requestSeq) return
+      this.seriesError = err instanceof Error ? err.message : String(err)
+    } finally {
+      if (seq === this.#requestSeq) this.seriesLoading = false
     }
   }
 }

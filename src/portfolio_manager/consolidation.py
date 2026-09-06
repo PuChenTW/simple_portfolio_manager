@@ -337,7 +337,7 @@ def build_consolidated_summary(
     # Reuses the rates resolved above, so a liability converts exactly as its cash already did
     # and the split can never disagree with the total it came from.
     liabilities_value = _converted_debt(fx, debt_local, currency, valuation_date, rates)
-    coverage = _coverage(total_value, unconverted_value)
+    coverage = coverage_percent(total_value, unconverted_value)
     _describe(warnings, unconverted, rates, coverage)
 
     return ConsolidatedSummary(
@@ -411,7 +411,7 @@ def _consolidate_position(
             "excluded from the totals rather than valued at zero"
         )
 
-    conversion = _rate_for(fx, local_currency, currency, valuation_date, rates)
+    conversion = rate_for(fx, local_currency, currency, valuation_date, rates)
     reporting_value: Decimal | None = None
     missing: UnconvertedAmount | None = None
 
@@ -458,7 +458,7 @@ def _consolidate_cash(
     total = ZERO
     rows: list[CurrencyTotal] = []
     for local_currency, amount in sorted(cash_local.items()):
-        conversion = _rate_for(fx, local_currency, currency, valuation_date, rates)
+        conversion = rate_for(fx, local_currency, currency, valuation_date, rates)
         if isinstance(conversion, FxUnavailable):
             rows.append(CurrencyTotal(local_currency, amount, None))
             if amount != ZERO:
@@ -489,14 +489,14 @@ def _converted_debt(
     """
     total = ZERO
     for local_currency, amount in sorted(debt_local.items()):
-        conversion = _rate_for(fx, local_currency, currency, valuation_date, rates)
+        conversion = rate_for(fx, local_currency, currency, valuation_date, rates)
         if isinstance(conversion, FxUnavailable):
             continue
         total += conversion.apply(amount)
     return total
 
 
-def _rate_for(
+def rate_for(
     fx: FxService,
     base: str,
     quote: str,
@@ -585,7 +585,7 @@ def _issuer_exposure(
     return sorted(exposures, key=lambda item: item.reporting_value, reverse=True)
 
 
-def _coverage(total: Decimal, unconverted: Decimal) -> Decimal:
+def coverage_percent(total: Decimal, unconverted: Decimal) -> Decimal:
     """Share of value that reached the reporting currency."""
     gross = total + unconverted
     if gross == ZERO:

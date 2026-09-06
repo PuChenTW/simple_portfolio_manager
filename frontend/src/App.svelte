@@ -2,6 +2,7 @@
   import { dashboard } from './lib/state.svelte'
   import { router } from './lib/route.svelte'
   import NetWorth from './lib/components/NetWorth.svelte'
+  import NetWorthTrend from './lib/components/NetWorthTrend.svelte'
   import Composition from './lib/components/Composition.svelte'
   import Allocation from './lib/components/Allocation.svelte'
   import Holdings from './lib/components/Holdings.svelte'
@@ -106,6 +107,14 @@
         <Classification summary={dashboard.summary} onchange={() => dashboard.refresh()} />
       {:else}
         <NetWorth summary={dashboard.summary} />
+
+        <!-- The hero answers "what am I worth"; this answers "how did I get here". Two
+             questions, so two blocks rather than a sparkline crowding the coverage notice. -->
+        <NetWorthTrend
+          series={dashboard.series}
+          loading={dashboard.seriesLoading}
+          error={dashboard.seriesError}
+        />
 
         {#if dashboard.summary.warnings.length}
           <ul class="warnings">

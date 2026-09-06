@@ -1314,6 +1314,88 @@ class ConsolidatedSummaryRead(ApiModel):
     warnings: list[str]
 
 
+class NavSeriesPointRead(ApiModel):
+    """One date on the consolidated series, in the reporting currency."""
+
+    valuation_date: date
+    securities_value: Decimal
+    cash_value: Decimal
+    assets_value: Decimal = Field(description="What the group owned on this date.")
+    liabilities_value: Decimal = Field(
+        description=(
+            "What the group owed, negative so that `assets_value` + `liabilities_value` == "
+            "`net_value`. Zero when no liability account had started by this date."
+        )
+    )
+    net_value: Decimal = Field(description="Assets less liabilities. This is the plotted line.")
+    contributing_account_count: int = Field(
+        description=(
+            "How many accounts are inside this number, which is rarely every account in the "
+            "group. Compare it with `total_account_count` before comparing two dates: a rise "
+            "where this count changes is composition, not gain."
+        )
+    )
+    converted_value_coverage_percent: Decimal = Field(
+        description="Share of this date's value that reached the reporting currency."
+    )
+    status: str = Field(description="complete, or partial when this date is understated.")
+    unconverted: list[UnconvertedAmountRead] = Field(
+        description="Value excluded from this point's totals rather than converted at a guess."
+    )
+    missing_portfolio_ids: list[str] = Field(
+        description=(
+            "Accounts that had started by this date but have no snapshot for it, so this point "
+            "understates the group. Accounts that had not started yet are not listed."
+        )
+    )
+
+
+class AccountEntryRead(ApiModel):
+    """The date an account's data begins, where the series changes what it measures."""
+
+    portfolio_id: str
+    portfolio_name: str
+    entered_on: date
+
+
+class NavSeriesRead(ApiModel):
+    """A group's value over time, with what each point covers.
+
+    The series sums the group's *current* members across their whole history, unlike
+    `get_consolidated_summary`, which honours effective-dated membership and therefore reports
+    nothing for a date before the group was assembled. The two endpoints answer different
+    questions and can disagree for the same past date.
+    """
+
+    group_id: str
+    group_name: str
+    reporting_currency: str
+    start_date: date
+    end_date: date
+    portfolio_ids: list[str]
+    points: list[NavSeriesPointRead]
+    account_entries: list[AccountEntryRead] = Field(
+        description=(
+            "When each account entered the series, oldest first. These are the dates where the "
+            "line changes what it measures."
+        )
+    )
+    calculation_version: str
+    calculation_method: str
+    total_account_count: int = Field(
+        description="Members in the group today, against which a point's count is read."
+    )
+    partial_points: int
+    missing_dates: list[date] = Field(
+        description=(
+            "Dates in range with no snapshot for any member. Reported, never interpolated. "
+            "Dates before the first account started are not gaps and are not listed."
+        )
+    )
+    fx_rates_used: list[FxRateRead]
+    warnings: list[str]
+
+
 class ErrorResponse(ApiModel):
     """Stable machine-readable error envelope used for validation and domain failures."""
 
