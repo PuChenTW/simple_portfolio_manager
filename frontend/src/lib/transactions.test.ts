@@ -4,11 +4,120 @@ import { ApiError } from './api/client'
 import {
   cashEffect,
   errorFor,
+  prepareEntry,
   shapeFor,
   staleFrom,
   typesForKind,
   TRANSACTION_TYPES,
+  type TransactionDraft,
 } from './transactions'
+
+function draft(values: Partial<TransactionDraft> = {}): TransactionDraft {
+  return {
+    type: 'buy', amount: '', quantity: '', unitPrice: '', ticker: '', fee: '', tax: '',
+    settlementAmount: '', memo: '', sourceReference: '', occurredOn: '2026-09-16',
+    requestId: 'entry-1', ...values,
+  }
+}
+
+describe('prepareEntry', () => {
+  it.each(['deposit', 'withdrawal', 'transfer_in', 'transfer_out'] as const)(
+    'uses only cash fields after switching a trade to %s', (type) => {
+      const input = draft({
+        ticker: 'AAPL', quantity: '2', unitPrice: '100', fee: '5', tax: '2', amount: '1000',
+      })
+      expect(prepareEntry(input, 'investment').effect).toBe(-207)
+
+      input.type = type
+      const entry = prepareEntry(input, 'investment')
+      expect(entry.payload).toEqual({
+        request_id: 'entry-1', transaction_type: type, amount: '1000',
+        occurred_at: '2026-09-16T00:00:00',
+      })
+      expect(entry.effect).toBe(type === 'deposit' || type === 'transfer_in' ? 1000 : -1000)
+      expect(entry.complete).toBe(true)
+      expect(entry.showTicker).toBe(false)
+      // Selecting effective fields must not erase a draft the user may switch back to.
+      expect(input.fee).toBe('5')
+      expect(input.ticker).toBe('AAPL')
+    },
+  )
+
+  it.each(['buy', 'sell'] as const)('preserves decimal strings for %s', (type) => {
+    const entry = prepareEntry(draft({
+      type, ticker: ' aapl ', quantity: ' 0.1234567890123456789 ', unitPrice: ' 100.00 ',
+      amount: '9999', fee: ' 0.10 ', tax: ' 0.20 ', memo: ' statement entry ',
+      sourceReference: ' confirmation-1 ',
+    }), 'investment')
+    expect(entry.payload).toEqual({
+      request_id: 'entry-1', transaction_type: type, ticker: 'AAPL',
+      quantity: '0.1234567890123456789', unit_price: '100.00', fee: '0.10', tax: '0.20',
+      occurred_at: '2026-09-16T00:00:00', memo: 'statement entry',
+      source_reference: 'confirmation-1',
+    })
+    expect(entry.complete).toBe(true)
+    expect(entry.effect).toBeCloseTo(type === 'buy' ? -12.645678901234568 : 12.045678901234568)
+  })
+
+  it('keeps an optional dividend ticker, then excludes it when switching to interest', () => {
+    const input = draft({
+      type: 'dividend', amount: '100', tax: '30', fee: '5', ticker: ' aapl ',
+      quantity: '2', unitPrice: '100',
+    })
+    const dividend = prepareEntry(input, 'investment')
+    expect(dividend.payload).toEqual({
+      request_id: 'entry-1', transaction_type: 'dividend', amount: '100', tax: '30',
+      ticker: 'AAPL', occurred_at: '2026-09-16T00:00:00',
+    })
+    expect(dividend.effect).toBe(70)
+    input.type = 'interest'
+    const interest = prepareEntry(input, 'investment')
+    expect(interest.payload).not.toHaveProperty('ticker')
+    expect(interest.effect).toBe(70)
+    expect(interest.complete).toBe(true)
+    expect(interest.showTicker).toBe(false)
+  })
+
+  it.each(['cash', 'liability'] as const)('excludes a hidden ticker on a %s portfolio', (kind) => {
+    const entry = prepareEntry(draft({ type: 'interest', amount: '100', ticker: 'AAPL' }), kind)
+    expect(entry.showTicker).toBe(false)
+    expect(entry.payload).not.toHaveProperty('ticker')
+    expect(entry.complete).toBe(true)
+  })
+
+  it.each(['buy', 'deposit', 'dividend'] as const)(
+    'uses the same explicit settlement for %s preview and payload', (type) => {
+      const entry = prepareEntry(draft({
+        type, ticker: 'AAPL', quantity: '1', unitPrice: '100', amount: '100',
+        settlementAmount: ' -123.4500 ',
+      }), 'investment')
+      expect(entry.effect).toBe(-123.45)
+      expect(entry.payload.settlement_amount).toBe('-123.4500')
+    },
+  )
+
+  it('omits blank optional fields while retaining an explicit zero', () => {
+    const entry = prepareEntry(draft({
+      type: 'dividend', amount: '100', tax: ' 0 ', ticker: ' ', memo: ' ',
+      sourceReference: ' ', settlementAmount: ' ',
+    }), 'investment')
+    expect(entry.payload).toEqual({
+      request_id: 'entry-1', transaction_type: 'dividend', amount: '100', tax: '0',
+      occurred_at: '2026-09-16T00:00:00',
+    })
+    expect(entry.complete).toBe(true)
+  })
+
+  it.each([
+    { ticker: '' }, { quantity: '' }, { unitPrice: '' }, { quantity: '0' },
+    { occurredOn: '' }, { type: 'deposit' as const, amount: '' },
+  ])('does not let hidden values satisfy missing required fields: %j', (missing) => {
+    const entry = prepareEntry(draft({
+      ticker: 'AAPL', quantity: '1', unitPrice: '100', amount: '1000', ...missing,
+    }), 'investment')
+    expect(entry.complete).toBe(false)
+  })
+})
 
 describe('shapeFor', () => {
   it('maps buys and sells to the trade shape', () => {

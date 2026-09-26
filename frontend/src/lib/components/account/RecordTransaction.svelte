@@ -1,11 +1,9 @@
 <script lang="ts">
   import { tick } from 'svelte'
-  import { api, type Portfolio, type TransactionCreate } from '../../api/client'
+  import { api, type Portfolio } from '../../api/client'
   import {
-    acceptsTicker,
-    cashEffect,
     errorFor,
-    shapeFor,
+    prepareEntry,
     staleFrom,
     TYPE_LABELS,
     typesForKind,
@@ -29,7 +27,6 @@
 
   const types = $derived(typesForKind(portfolio.kind))
   let type = $state<TransactionType>('deposit')
-  const shape = $derived(shapeFor(type))
 
   // Fields, all strings. An amount never becomes a JS number on its way to the wire: parsing
   // "0.1" and re-serializing it yields 0.30000000000000004 once it is added to anything, and the
@@ -48,16 +45,6 @@
   let advancedOpen = $state(false)
   let settlementAmount = $state('')
   let sourceReference = $state('')
-
-  /** Whether this shape and this account together allow a ticker.
-   *
-   * Both halves matter. `reject_security_activity` refuses a ticker on a positionless book even
-   * for a fee or interest event, because a ticker there attaches an instrument to the leg. A
-   * field the server will refuse is a field this form must not render.
-   */
-  const showTicker = $derived(
-    acceptsTicker(type) && portfolio.kind !== 'cash' && portfolio.kind !== 'liability',
-  )
 
   /** What the last blur resolved, so a stale name never sits beside a since-edited symbol. */
   let resolved = $state<{ symbol: string; name: string; currency: string } | null>(null)
@@ -100,25 +87,6 @@
       : null,
   )
 
-  /** The settlement cash this entry will move, recomputed as the user types.
-   *
-   * A single line, not a leg table: a full preview would duplicate more of `build_legs` in
-   * TypeScript, and the copy would drift from the server that actually posts.
-   */
-  // Only the fields this shape actually renders are passed. A fee typed into a previous trade
-  // still sits in `fee` when the type switches to a deposit, and the preview must not quietly
-  // charge it against an entry whose form never showed it.
-  // A supplied `settlement_amount` overrides the computed figure in `build_legs`, so the preview
-  // shows it too. Stating the computed figure while the server posts another is worse than
-  // showing nothing: the line's whole job is to say what will actually land.
-  const effect = $derived(
-    shape === 'trade'
-      ? cashEffect({ type, quantity, unitPrice, fee, tax, settlementAmount })
-      : shape === 'income'
-        ? cashEffect({ type, amount, tax, settlementAmount })
-        : cashEffect({ type, amount, settlementAmount }),
-  )
-
   // Bound to `occurred_at`, never `trade_date`. `replay.py` filters and orders on `occurred_at`
   // alone -- `trade_date` is display metadata that drives no valuation. A date collected into
   // `trade_date` would read as June in the table below and replay as today, which breaks
@@ -135,6 +103,14 @@
    * submit keeps the key, so the retry is the same logical mutation rather than a second one.
    */
   let requestId = $state(crypto.randomUUID())
+
+  const entry = $derived(prepareEntry({
+    type, amount, ticker, quantity, unitPrice, fee, tax, settlementAmount,
+    occurredOn, requestId, memo, sourceReference,
+  }, portfolio.kind))
+  const shape = $derived(entry.shape)
+  const showTicker = $derived(entry.showTicker)
+  const effect = $derived(entry.effect)
 
   let submitting = $state(false)
   let error = $state<{ field: ErrorField; message: string } | null>(null)
@@ -181,15 +157,7 @@
     }
   }
 
-  // Enough to post, not everything the server checks. A required box being empty is the client's
-  // to catch; whether the account holds the cash or the shares is the server's. See
-  // "No client-side blocking" in the spec -- every refusal comes from the ledger.
-  const complete = $derived(
-    shape === 'trade'
-      ? !!ticker.trim() && Number(quantity) > 0 && Number(unitPrice) > 0
-      : Number(amount) > 0,
-  )
-  const canSubmit = $derived(!submitting && !!occurredOn && complete)
+  const canSubmit = $derived(!submitting && entry.complete)
 
   /** A back-dated posting invalidates every snapshot from its date forward.
    *
@@ -200,39 +168,6 @@
    */
   const staleDate = $derived(postedOn ? staleFrom(postedOn, today()) : null)
 
-  function payload(): TransactionCreate {
-    const body: TransactionCreate = {
-      request_id: requestId,
-      transaction_type: type,
-      // The date as typed, with midnight appended and *no* timezone conversion.
-      //
-      // `new Date(...).toISOString()` is the trap here, and it is silent. It reads the string as
-      // local midnight and re-serializes it in UTC, so east of Greenwich a date entered as the
-      // 16th is stored as the 15th. `replay.py` filters on `occurred_at`, so the event then
-      // replays into the wrong day while the form that sent it still displays the right one.
-      // Sending the naive local datetime keeps the calendar date the user typed.
-      occurred_at: `${occurredOn}T00:00:00`,
-    }
-    if (shape === 'trade') {
-      body.ticker = ticker.trim().toUpperCase()
-      body.quantity = quantity.trim()
-      body.unit_price = unitPrice.trim()
-    } else {
-      body.amount = amount.trim()
-      if (showTicker && ticker.trim()) body.ticker = ticker.trim().toUpperCase()
-    }
-    // Omitted rather than sent as "0": the server already defaults both, and an absent field is
-    // the honest way to say the entry carried no fee. A cash movement has neither box, so its
-    // stale values from a previous entry must never ride along.
-    if (shape === 'trade' && fee.trim()) body.fee = fee.trim()
-    if (shape !== 'cash' && tax.trim()) body.tax = tax.trim()
-    if (memo.trim()) body.memo = memo.trim()
-    // Omitted when empty, so an untouched disclosure changes nothing about the request.
-    if (settlementAmount.trim()) body.settlement_amount = settlementAmount.trim()
-    if (sourceReference.trim()) body.source_reference = sourceReference.trim()
-    return body
-  }
-
   async function submit(event: SubmitEvent): Promise<void> {
     event.preventDefault()
     if (!canSubmit) return
@@ -240,7 +175,7 @@
     submitting = true
     error = null
     try {
-      await api.recordTransaction(portfolio.id, payload())
+      await api.recordTransaction(portfolio.id, entry.payload)
       postedOn = occurredOn
       // Type and date survive: the next line of a statement usually shares both.
       reset(false)

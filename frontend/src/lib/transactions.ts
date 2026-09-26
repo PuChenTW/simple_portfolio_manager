@@ -5,7 +5,7 @@
  * cash effect and a missing kind filter both survive inspection.
  */
 
-import { ApiError, type PortfolioKind } from './api/client'
+import { ApiError, type PortfolioKind, type TransactionCreate } from './api/client'
 
 /** The transaction types `record_transaction` accepts, in picker order.
  *
@@ -113,6 +113,56 @@ export type Entry = {
   fee?: string
   tax?: string
   settlementAmount?: string
+}
+
+export type TransactionDraft = Required<Entry> & {
+  ticker: string
+  occurredOn: string
+  requestId: string
+  memo: string
+  sourceReference: string
+}
+
+/** One interpretation of the draft for display, preview, and posting.
+ * Hidden fields survive type switches in the form, but must never reach the ledger or preview.
+ */
+export function prepareEntry(draft: TransactionDraft, kind: PortfolioKind) {
+  const shape = shapeFor(draft.type)
+  const showTicker = acceptsTicker(draft.type) && kind === 'investment'
+  const payload: TransactionCreate = {
+    request_id: draft.requestId,
+    transaction_type: draft.type,
+    // Preserve the entered calendar date: UTC serialization can move it into the previous day.
+    occurred_at: draft.occurredOn ? `${draft.occurredOn}T00:00:00` : '',
+  }
+
+  if (shape === 'trade') {
+    payload.quantity = draft.quantity.trim()
+    payload.unit_price = draft.unitPrice.trim()
+    if (draft.fee.trim()) payload.fee = draft.fee.trim()
+  } else {
+    payload.amount = draft.amount.trim()
+  }
+  if (showTicker && draft.ticker.trim()) payload.ticker = draft.ticker.trim().toUpperCase()
+  if (shape !== 'cash' && draft.tax.trim()) payload.tax = draft.tax.trim()
+  if (draft.memo.trim()) payload.memo = draft.memo.trim()
+  if (draft.settlementAmount.trim()) payload.settlement_amount = draft.settlementAmount.trim()
+  if (draft.sourceReference.trim()) payload.source_reference = draft.sourceReference.trim()
+
+  const effect = cashEffect({
+    type: draft.type,
+    amount: payload.amount,
+    quantity: payload.quantity,
+    unitPrice: payload.unit_price,
+    fee: payload.fee,
+    tax: payload.tax,
+    settlementAmount: payload.settlement_amount,
+  })
+  const complete = shape === 'trade'
+    ? !!payload.ticker && Number(payload.quantity) > 0 && Number(payload.unit_price) > 0
+    : Number(payload.amount) > 0
+
+  return { shape, showTicker, payload, effect, complete: !!draft.occurredOn && complete }
 }
 
 /** An empty box means zero, not unknown. A box holding nonsense means unknown. */

@@ -22,6 +22,13 @@ A named selection of portfolios reported together in one currency. A group owns 
 own — it only says which books to add up.
 _Avoid_: Household, consolidation, aggregate
 
+### Recording
+
+**Transaction entry**:
+The details being entered for an event that has already happened, before it is posted to a
+portfolio's journal. Only fields applicable to that event type belong to the entry.
+_Avoid_: Order (an instruction to execute a trade), journal event (already posted)
+
 ### Value
 
 **Assets**:
