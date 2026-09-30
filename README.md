@@ -260,6 +260,15 @@ Environment variables:
 - `PORTFOLIO_API_BASE_URL` — API base URL (default `http://127.0.0.1:8001`).
 - `PORTFOLIO_MCP_TRANSPORT` — `stdio` (default) or `streamable-http`.
 - `PORTFOLIO_MCP_HOST` / `PORTFOLIO_MCP_PORT` — bind address for HTTP (default `127.0.0.1:8002`).
+- `PORTFOLIO_MCP_SESSION_IDLE_TIMEOUT_SECONDS` — positive integer idle timeout for HTTP
+  sessions (default `1800`, or 30 minutes).
+
+Each session owns its API client through the MCP lifespan context, so closing one session
+does not interrupt another. HTTP sessions expire after the configured time without a new HTTP
+request, releasing their client and connections even when a caller disappears without ending
+the session. Requests renew the deadline; a tool call still running when that deadline passes
+is cancelled. Expired sessions return `404 Session not found`; clients must initialize a new
+session. Stdio clients release their API client when the subprocess session ends.
 
 Register it in an MCP client. For a stdio client, point it at the command:
 

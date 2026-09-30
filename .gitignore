@@ -12,6 +12,7 @@ CLAUDE.local.md
 .temp
 .DS_Store
 .claude
+.codex
 .agents
 .scratch
 docs

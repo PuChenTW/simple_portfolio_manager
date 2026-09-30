@@ -7,10 +7,11 @@ layer only translates. Run it over stdio (default) or Streamable HTTP.
 """
 
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 
+import anyio
 import httpx
 from mcp.server.fastmcp import FastMCP
 
@@ -56,23 +57,20 @@ ERROR_CODES = {
     "valuation_date_in_future": "A portfolio cannot be valued on a date that has not happened.",
 }
 
-# Passed to the FastMCP lifespan so the shared client lives exactly as long as the server.
-_client: httpx.AsyncClient | None = None
-
 
 @asynccontextmanager
-async def lifespan(_server: FastMCP) -> AsyncIterator[None]:
-    global _client
+async def lifespan(_server: FastMCP) -> AsyncGenerator[httpx.AsyncClient]:
     base_url = os.getenv("PORTFOLIO_API_BASE_URL", DEFAULT_BASE_URL)
-    async with httpx.AsyncClient(base_url=base_url, timeout=30.0) as client:
-        _client = client
-        try:
-            yield
-        finally:
-            _client = None
+    client = httpx.AsyncClient(base_url=base_url, timeout=30.0)
+    try:
+        yield client
+    finally:
+        # Idle expiry and server shutdown cancel the session before cleanup runs.
+        with anyio.CancelScope(shield=True):
+            await client.aclose()
 
 
-mcp = FastMCP("local-portfolio-manager", lifespan=lifespan)
+mcp = FastMCP[httpx.AsyncClient]("local-portfolio-manager", lifespan=lifespan)
 
 
 class ApiError(Exception):
@@ -87,9 +85,12 @@ class ApiError(Exception):
 
 
 def _client_or_raise() -> httpx.AsyncClient:
-    if _client is None:
-        raise RuntimeError("HTTP client is not initialized; the MCP lifespan is not active")
-    return _client
+    try:
+        return mcp.get_context().request_context.lifespan_context
+    except ValueError as exc:
+        raise RuntimeError(
+            "HTTP client is not initialized; the MCP lifespan is not active"
+        ) from exc
 
 
 async def _request(method: str, path: str, **kwargs: Any) -> Any:
@@ -349,9 +350,7 @@ async def list_positions(
 
 
 @mcp.tool()
-async def replace_position_tags(
-    portfolio_id: str, ticker: str, tags: list[str]
-) -> dict[str, Any]:
+async def replace_position_tags(portfolio_id: str, ticker: str, tags: list[str]) -> dict[str, Any]:
     """Atomically set the complete tag set on an open position; this is not an append.
 
     Read or remember existing tags before sending a partial set. Send [] to remove all tags.
@@ -500,9 +499,7 @@ async def record_transaction(
     ):
         if value is not None:
             payload[key] = value
-    return await _request(
-        "POST", f"/api/v1/portfolios/{portfolio_id}/transactions", json=payload
-    )
+    return await _request("POST", f"/api/v1/portfolios/{portfolio_id}/transactions", json=payload)
 
 
 @mcp.tool()
@@ -534,9 +531,7 @@ async def get_journal_event(portfolio_id: str, event_id: str) -> dict[str, Any]:
     `flow_classification` (external investor money versus internal returns such as dividends), and
     links to any reversal. Use this to explain a cash or position change rather than inferring it.
     """
-    return await _request(
-        "GET", f"/api/v1/portfolios/{portfolio_id}/transactions/{event_id}"
-    )
+    return await _request("GET", f"/api/v1/portfolios/{portfolio_id}/transactions/{event_id}")
 
 
 @mcp.tool()
@@ -571,9 +566,7 @@ async def list_journal_events(
     ):
         if value is not None:
             params[key] = value
-    return await _request(
-        "GET", f"/api/v1/portfolios/{portfolio_id}/transactions", params=params
-    )
+    return await _request("GET", f"/api/v1/portfolios/{portfolio_id}/transactions", params=params)
 
 
 # --- Corporate actions ------------------------------------------------------
@@ -657,9 +650,7 @@ async def list_corporate_actions(
 
 
 @mcp.tool()
-async def preview_corporate_action_application(
-    portfolio_id: str, action_id: str
-) -> dict[str, Any]:
+async def preview_corporate_action_application(portfolio_id: str, action_id: str) -> dict[str, Any]:
     """Show exactly what applying an action would do to a portfolio, writing nothing.
 
     Always call this before `apply_corporate_action`. Check `applicable`, `warnings`,
@@ -736,9 +727,7 @@ async def set_instrument_classification_override(
     }
     if effective_at is not None:
         payload["effective_at"] = effective_at
-    return await _request(
-        "PUT", f"/api/v1/instruments/{reference}/classification", json=payload
-    )
+    return await _request("PUT", f"/api/v1/instruments/{reference}/classification", json=payload)
 
 
 @mcp.tool()
@@ -839,9 +828,7 @@ async def get_nav_history(
     `warnings`. A series with gaps or partial days is not a valid basis for comparing periods.
     """
     params = {"start_date": start_date, "end_date": end_date}
-    return await _request(
-        "GET", f"/api/v1/portfolios/{portfolio_id}/nav-history", params=params
-    )
+    return await _request("GET", f"/api/v1/portfolios/{portfolio_id}/nav-history", params=params)
 
 
 @mcp.tool()
@@ -880,9 +867,7 @@ async def get_portfolio_performance(
         "end_date": end_date,
         "include_daily": include_daily,
     }
-    return await _request(
-        "GET", f"/api/v1/portfolios/{portfolio_id}/performance", params=params
-    )
+    return await _request("GET", f"/api/v1/portfolios/{portfolio_id}/performance", params=params)
 
 
 @mcp.tool()
@@ -947,15 +932,11 @@ async def update_portfolio_group(group_id: str, name: str) -> dict[str, Any]:
     changed, because stored totals were converted into it. To change which portfolios belong to
     the group, use update_portfolio_group_members instead.
     """
-    return await _request(
-        "PATCH", f"/api/v1/portfolio-groups/{group_id}", json={"name": name}
-    )
+    return await _request("PATCH", f"/api/v1/portfolio-groups/{group_id}", json={"name": name})
 
 
 @mcp.tool()
-async def update_portfolio_group_members(
-    group_id: str, portfolio_ids: list[str]
-) -> dict[str, Any]:
+async def update_portfolio_group_members(group_id: str, portfolio_ids: list[str]) -> dict[str, Any]:
     """Replace which portfolios belong to a group.
 
     Pass the complete desired membership, not just additions. A portfolio removed here keeps its
@@ -995,9 +976,7 @@ async def get_consolidated_summary(
         params["as_of"] = as_of
     if reporting_currency is not None:
         params["reporting_currency"] = reporting_currency
-    return await _request(
-        "GET", f"/api/v1/portfolio-groups/{group_id}/summary", params=params
-    )
+    return await _request("GET", f"/api/v1/portfolio-groups/{group_id}/summary", params=params)
 
 
 @mcp.tool()
@@ -1035,9 +1014,7 @@ async def get_consolidated_nav_history(
         params["end_date"] = end_date
     if reporting_currency is not None:
         params["reporting_currency"] = reporting_currency
-    return await _request(
-        "GET", f"/api/v1/portfolio-groups/{group_id}/nav-history", params=params
-    )
+    return await _request("GET", f"/api/v1/portfolio-groups/{group_id}/nav-history", params=params)
 
 
 # --- Resources --------------------------------------------------------------
@@ -1189,8 +1166,10 @@ async def portfolios_resource() -> str:
     if not portfolios:
         lines = ["No portfolios exist yet. Create one with `create_portfolio`."]
     else:
-        lines = [f"- **{item['name']}** ({item['base_currency']}) — `{item['id']}`"
-                 for item in portfolios]
+        lines = [
+            f"- **{item['name']}** ({item['base_currency']}) — `{item['id']}`"
+            for item in portfolios
+        ]
 
     group_items = groups.get("items", []) if isinstance(groups, dict) else groups
     if group_items:
@@ -1372,11 +1351,21 @@ answer; an invented one is indistinguishable from a verified one once stored.
 """
 
 
+def _configure_http_sessions() -> None:
+    timeout = int(os.getenv("PORTFOLIO_MCP_SESSION_IDLE_TIMEOUT_SECONDS", "1800"))
+    if timeout <= 0:
+        raise ValueError("PORTFOLIO_MCP_SESSION_IDLE_TIMEOUT_SECONDS must be a positive integer")
+    # SDK v1 exposes idle expiry on the session manager, not the FastMCP constructor.
+    mcp.streamable_http_app()
+    mcp.session_manager.session_idle_timeout = timeout
+
+
 def main() -> None:
     transport = os.getenv("PORTFOLIO_MCP_TRANSPORT", "stdio")
     if transport == "streamable-http":
         mcp.settings.host = os.getenv("PORTFOLIO_MCP_HOST", "127.0.0.1")
         mcp.settings.port = int(os.getenv("PORTFOLIO_MCP_PORT", "8002"))
+        _configure_http_sessions()
         mcp.run(transport="streamable-http")
     else:
         mcp.run(transport="stdio")

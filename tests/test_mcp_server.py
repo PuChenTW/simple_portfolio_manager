@@ -1,11 +1,12 @@
 """Tests for the MCP server, driven against the real FastAPI app in-memory.
 
-The MCP tools are thin async wrappers over the HTTP API. We point the module's shared client
-at the ASGI app (same DB + fake market provider as the API tests) and call the tool functions
-directly, so no network or running server is required.
+The MCP tools are thin async wrappers over the HTTP API. We supply a lifespan context client
+pointing at the ASGI app (same DB + fake market provider as the API tests) and call the tool
+functions directly, so no network or running server is required.
 """
 
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -37,14 +38,15 @@ def anyio_backend() -> str:
 
 @pytest.fixture
 async def mcp_client(harness, monkeypatch) -> AsyncIterator[None]:
-    """Point the MCP server's shared client at the same app/DB the API tests use.
+    """Supply a request lifespan context pointing at the same app/DB the API tests use.
 
     `harness` installs the DB + fake-provider dependency overrides on `app`; we just wrap an
     in-memory ASGI client around it so the tools exercise the real HTTP stack without a socket.
     """
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        monkeypatch.setattr(mcp_server, "_client", client)
+        context = SimpleNamespace(request_context=SimpleNamespace(lifespan_context=client))
+        monkeypatch.setattr(mcp_server.mcp, "get_context", lambda: context)
         yield
 
 
@@ -333,9 +335,8 @@ async def test_the_opening_balance_prompt_states_the_rule_that_prevents_the_erro
     assert "Broker" in text and "USD" in text, "arguments must reach the rendered prompt"
 
 
-async def test_the_inventory_resource_survives_an_unreachable_api(monkeypatch) -> None:
+async def test_the_inventory_resource_survives_an_inactive_lifespan() -> None:
     """A resource that raises leaves a client with no listing at all; this degrades instead."""
-    monkeypatch.setattr(mcp_server, "_client", None)
     contents = await mcp_server.mcp.read_resource("portfolio://portfolios")
     text = list(contents)[0].content
     assert "Portfolios" in text

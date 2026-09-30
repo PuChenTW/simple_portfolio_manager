@@ -67,6 +67,7 @@ services:
       PORTFOLIO_MCP_TRANSPORT: streamable-http
       PORTFOLIO_MCP_HOST: 0.0.0.0
       PORTFOLIO_MCP_PORT: "8002"
+      PORTFOLIO_MCP_SESSION_IDLE_TIMEOUT_SECONDS: "${PORTFOLIO_MCP_SESSION_IDLE_TIMEOUT_SECONDS:-1800}"
       PORTFOLIO_API_BASE_URL: http://portfolio-manager:8001
     healthcheck:
       test:

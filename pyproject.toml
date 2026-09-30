@@ -6,9 +6,10 @@ readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "alembic>=1.16.5",
+    "anyio>=4.0",
     "fastapi>=0.116.1",
     "httpx>=0.28.1",
-    "mcp>=1.12",
+    "mcp>=1.28.1,<2",
     "pandas>=2.3.1",
     "redis>=5.0",
     "sqlalchemy>=2.0.43",
@@ -22,7 +23,6 @@ portfolio-mcp = "portfolio_manager.mcp_server:main"
 
 [dependency-groups]
 dev = [
-    "anyio>=4.0",
     "pytest>=8.4.1",
     "ruff>=0.12.11",
 ]
