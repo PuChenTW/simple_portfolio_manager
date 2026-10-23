@@ -12,6 +12,16 @@ describe('timezone preference', () => {
     saveTimezone('browser', storage)
     expect(readTimezone(storage)).toBe('browser')
   })
+  it('saves canonical IANA names and accepts aliases without a slash', () => {
+    const values = new Map<string, string>()
+    const storage = { getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value) } }
+    expect(saveTimezone('asia/taipei', storage)).toBe('Asia/Taipei')
+    expect(readTimezone(storage)).toBe('Asia/Taipei')
+    expect(saveTimezone('CET', storage)).toBe('Europe/Brussels')
+    expect(readTimezone(storage)).toBe('Europe/Brussels')
+    expect(() => saveTimezone('+08:00', storage)).toThrow()
+  })
 })
 
 describe('transaction time input', () => {

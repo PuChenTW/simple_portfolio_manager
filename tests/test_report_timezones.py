@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+import pytest
+
 from portfolio_manager import api, consolidation
 
 
@@ -11,11 +13,12 @@ def group_for(harness):
     return portfolio, group["id"]
 
 
-def test_transaction_rejects_a_time_without_offset(harness):
+@pytest.mark.parametrize("value", ["2020-09-17T07:00:00", 0, "0", 1760000000, "1760000000"])
+def test_transaction_rejects_a_time_without_offset(harness, value):
     portfolio = harness.portfolio("Time", "TWD")
     response = harness.client.post(f"/api/v1/portfolios/{portfolio}/transactions", json={
         "request_id": "naive", "transaction_type": "deposit", "amount": "1000",
-        "occurred_at": "2020-09-17T07:00:00",
+        "occurred_at": value,
     })
     assert response.status_code == 422
 

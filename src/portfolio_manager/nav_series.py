@@ -136,7 +136,8 @@ def build_nav_series(
     fx = FxService(session, provider)
     _prefetch_rates(fx, members, currency, first, last)
 
-    entries = _account_entries(session, members, by_date, report_timezone)
+    started = first_event_dates(session, portfolio_ids, report_timezone)
+    entries = _account_entries(members, by_date, started)
     started_by_date = _started_on_or_before(entries)
 
     kinds = {item.id: item.kind for item in members}
@@ -250,10 +251,9 @@ def _prefetch_rates(
 
 
 def _account_entries(
-    session: Session,
     members: list[Portfolio],
     by_date: dict[date, dict[str, PortfolioValuationSnapshot]],
-    report_timezone: str = "UTC",
+    started: dict[str, date],
 ) -> list[AccountEntry]:
     """When each account's data begins.
 
@@ -262,7 +262,6 @@ def _account_entries(
     a date where the line does not move. The entry that matters is the first real activity.
     Accounts with no journal events fall back to their first snapshot so they are still declared.
     """
-    started = first_event_dates(session, [item.id for item in members], report_timezone)
     earliest: dict[str, date] = {}
     for day, snapshots in by_date.items():
         for portfolio_id in snapshots:

@@ -699,13 +699,15 @@ class TransactionCreate(ApiModel):
         description="Offset or Z required. Omit for server time. Future times are refused.",
     )
 
-    @field_validator("occurred_at")
+    @field_validator("occurred_at", mode="before")
     @classmethod
-    def validate_occurred_at(cls, value: datetime | None) -> datetime | None:
+    def validate_occurred_at(cls, value: object) -> datetime | None:
         if value is None:
             return None
-        if value.tzinfo is None or value.utcoffset() is None:
-            raise ValueError("occurred_at requires a timezone offset or Z")
+        if isinstance(value, str):
+            value = datetime.fromisoformat(value)
+        if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("occurred_at requires an ISO timestamp with a timezone offset or Z")
         return value.astimezone(UTC)
     trade_date: datetime | None = None
     settlement_date: datetime | None = None

@@ -13,8 +13,7 @@ class TimezoneState {
       getItem: (key: string) => localStorage.getItem(key),
       setItem: (key: string, item: string) => localStorage.setItem(key, item),
     }
-    saveTimezone(value, storage)
-    this.preference = value
+    this.preference = saveTimezone(value, storage)
   }
 
   checkBrowser(): void {

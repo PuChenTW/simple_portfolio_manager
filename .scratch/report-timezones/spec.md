@@ -49,3 +49,18 @@ Review Standards and Spec independently against the review base. Commit on the c
 - `bun run build`: passed.
 - `bun run test:e2e`: passed at 1440px and 390px against a fresh migrated temporary SQLite database on port 8017.
 - Existing Docker services on ports 8001 and 8002 were not modified.
+
+## Review findings and corrections
+
+### Standards
+
+- P2: `_account_entries` gained a fourth argument. Resolve event dates in the caller and keep three arguments.
+
+### Spec
+
+- P1: Numeric transaction timestamps bypassed offset validation through Pydantic coercion. Validate ISO inputs before coercion. API regressions cover numeric values and numeric strings.
+- P2: Browser timezone validation accepted noncanonical spelling and rejected valid aliases without a slash. Save and send the canonical IANA name from Intl. Preserve alias support and reject fixed-offset names.
+
+All three findings are accepted and corrected. Follow-up review checks their resolution.
+Final revalidation: 452 Python tests passed, 3 external tests skipped. Frontend tests: 64 passed.
+Ruff, typecheck, build and both Playwright widths passed again.

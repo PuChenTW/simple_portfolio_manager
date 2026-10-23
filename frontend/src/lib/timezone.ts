@@ -16,20 +16,22 @@ type PreferenceStorage = Pick<Storage, 'getItem' | 'setItem'>
 export function readTimezone(storage: PreferenceStorage): string {
   try {
     const value = storage.getItem(TIMEZONE_KEY)
-    return value && (value === 'browser' || validTimezone(value)) ? value : 'browser'
+    return value === 'browser' ? value : canonicalTimezone(value ?? '') ?? 'browser'
   } catch {
     return 'browser'
   }
 }
 
-export function saveTimezone(value: string, storage: PreferenceStorage): void {
-  if (value !== 'browser' && !validTimezone(value)) throw new Error('Use an IANA timezone name.')
-  preference = value
+export function saveTimezone(value: string, storage: PreferenceStorage): string {
+  const canonical = value === 'browser' ? value : canonicalTimezone(value)
+  if (!canonical) throw new Error('Use an IANA timezone name.')
+  preference = canonical
   try {
-    storage.setItem(TIMEZONE_KEY, value)
+    storage.setItem(TIMEZONE_KEY, canonical)
   } catch {
     // Storage can be unavailable in private browsing. The in-memory preference still applies.
   }
+  return canonical
 }
 
 type LocalTime = { date: string; time: string; timezone: string; offset?: string }
@@ -62,11 +64,14 @@ export function resolveTime(input: LocalTime) {
 }
 
 export function validTimezone(value: string): boolean {
-  if (value !== 'UTC' && !value.includes('/')) return false
+  return canonicalTimezone(value) !== null
+}
+
+function canonicalTimezone(value: string): string | null {
+  if (/^[+-]/.test(value)) return null
   try {
-    new Intl.DateTimeFormat('en', { timeZone: value }).format()
-    return true
+    return new Intl.DateTimeFormat('en', { timeZone: value }).resolvedOptions().timeZone
   } catch {
-    return false
+    return null
   }
 }
