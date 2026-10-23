@@ -253,12 +253,14 @@
           <span class="hint faint">The date the transaction happened, not today.</span>
         </label>
 
-        <label class="field">
-          <span class="label">Time ({entryTimezone})</span>
-          <input type="time" step="60" bind:value={occurredTime}
-            onchange={() => { offset = ''; clearConfirmation() }} required />
-        </label>
-        <button type="button" onclick={setNow}>Set to now</button>
+        <div class="field">
+          <label class="label" for="transaction-time">Time ({entryTimezone})</label>
+          <div class="time-input">
+            <input id="transaction-time" type="time" step="60" bind:value={occurredTime}
+              onchange={() => { offset = ''; clearConfirmation() }} required />
+            <button type="button" class="set-now" onclick={setNow}>Set to now</button>
+          </div>
+        </div>
         {#if timeOptions.length > 1}
           <label class="field">
             <span class="label">UTC offset</span>
@@ -512,6 +514,17 @@
     min-width: 0;
   }
 
+  .time-input {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .time-input input {
+    flex: 1;
+    width: 0;
+  }
+
   .wide {
     max-width: 460px;
   }
@@ -565,6 +578,21 @@
     font-size: 13px;
     border-radius: var(--radius-sm);
     cursor: pointer;
+  }
+
+  .set-now {
+    flex: none;
+    padding: 5px 8px;
+    font-size: 11px;
+    white-space: nowrap;
+    color: var(--text-muted);
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+  }
+
+  .set-now:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 
   button:disabled {

@@ -3,6 +3,7 @@ import { expect, test } from '@playwright/test'
 for (const width of [1440, 390]) {
   test(`timezone entry and dashboard at ${width}px`, async ({ page, request }) => {
     await page.setViewportSize({ width, height: 900 })
+    await page.emulateMedia({ colorScheme: 'dark' })
     const suffix = `${width}-${Date.now()}`
     const accountResponse = await request.post('/api/v1/cash-accounts', {
       data: { name: `Timezone ${suffix}`, base_currency: 'TWD' },
@@ -20,6 +21,16 @@ for (const width of [1440, 390]) {
     const time = page.getByLabel('Time (Asia/Taipei)', { exact: true })
     await expect(date).toHaveValue(/\d{4}-\d{2}-\d{2}/)
     await expect(time).toHaveValue(/\d{2}:\d{2}/)
+    const nowButton = page.getByRole('button', { name: 'Set to now', exact: true })
+    const buttonBox = await nowButton.boundingBox()
+    const timeBox = await time.boundingBox()
+    expect(buttonBox).not.toBeNull()
+    expect(timeBox).not.toBeNull()
+    expect(buttonBox!.width).toBeLessThanOrEqual(110)
+    expect(buttonBox!.height).toBeLessThanOrEqual(36)
+    expect(Math.abs((buttonBox!.y + buttonBox!.height / 2) - (timeBox!.y + timeBox!.height / 2)))
+      .toBeLessThanOrEqual(2)
+    await page.screenshot({ path: `test-results/transaction-time-${width}.png`, fullPage: true })
     const initialDate = await date.inputValue()
     const initialTime = await time.inputValue()
     await page.getByLabel(/^Amount \(TWD\)/).fill('1000')
