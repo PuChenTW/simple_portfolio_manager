@@ -24,7 +24,7 @@
     /** The group to return to, so the breadcrumb names where "back" goes. */
     groupName: string | null
     /** Something changed that the dashboard's own lists also report. */
-    onchange: () => void
+    onchange: () => void | Promise<void>
   } = $props()
 
   // Tabs of one account, in the order they are usually needed: what is held, how it got there,
@@ -107,9 +107,14 @@
    * situation a back-dated posting creates, and it needs the same notice. */
   let reversalStaleFrom = $state<string | null>(null)
 
+  async function afterPosting(): Promise<void> {
+    await account.afterPosting()
+    await onchange()
+  }
+
   async function onReversed(originalOccurredAt: string): Promise<void> {
     reversalStaleFrom = staleFrom(originalOccurredAt, today())
-    await account.afterPosting()
+    await afterPosting()
   }
 </script>
 
@@ -170,7 +175,7 @@
              independently of the ledger's load state, since a failed page read is no reason to
              refuse a posting. -->
         <div class="stack">
-          <RecordTransaction {portfolio} onposted={() => account.afterPosting()} />
+          <RecordTransaction {portfolio} onposted={afterPosting} />
 
           {#if reversalStaleFrom}
             <StaleSnapshots from={reversalStaleFrom} {portfolioId}>

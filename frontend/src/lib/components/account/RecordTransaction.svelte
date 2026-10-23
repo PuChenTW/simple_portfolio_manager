@@ -12,6 +12,8 @@
   } from '../../transactions'
   import { exactMoney, shortDate } from '../../format'
   import { today } from '../../snapshots'
+  import { timezone } from '../../timezone.svelte'
+  import { localTimeOptions, timeFields } from '../../timezone'
   import StaleSnapshots from './StaleSnapshots.svelte'
 
   let {
@@ -87,14 +89,21 @@
       : null,
   )
 
-  // Bound to `occurred_at`, never `trade_date`. `replay.py` filters and orders on `occurred_at`
-  // alone -- `trade_date` is display metadata that drives no valuation. A date collected into
-  // `trade_date` would read as June in the table below and replay as today, which breaks
-  // invariant 5 with nothing on screen to show for it.
-  //
-  // It persists between entries rather than resetting: statement entry is a burst of
-  // transactions sharing one date, and re-typing it each time is where a wrong date comes from.
-  let occurredOn = $state(today())
+  let occurredOn = $state('')
+  let occurredTime = $state('')
+  let entryTimezone = $state(timezone.effective)
+  let offset = $state('')
+  const timeOptions = $derived(localTimeOptions({
+    date: occurredOn, time: occurredTime, timezone: entryTimezone,
+  }))
+
+  function setNow(): void {
+    const fields = timeFields(entryTimezone)
+    occurredOn = fields.date
+    occurredTime = fields.time
+    offset = ''
+    clearConfirmation()
+  }
 
   /** One idempotency key per form session, re-minted only after a success.
    *
@@ -106,7 +115,7 @@
 
   const entry = $derived(prepareEntry({
     type, amount, ticker, quantity, unitPrice, fee, tax, settlementAmount,
-    occurredOn, requestId, memo, sourceReference,
+    occurredOn, occurredTime, timezone: entryTimezone, offset, requestId, memo, sourceReference,
   }, portfolio.kind))
   const shape = $derived(entry.shape)
   const showTicker = $derived(entry.showTicker)
@@ -152,7 +161,8 @@
     requestId = crypto.randomUUID()
     if (full) {
       type = types.includes('deposit') ? 'deposit' : types[0]
-      occurredOn = today()
+      entryTimezone = timezone.effective
+      setNow()
       postedOn = null
     }
   }
@@ -171,6 +181,10 @@
   async function submit(event: SubmitEvent): Promise<void> {
     event.preventDefault()
     if (!canSubmit) return
+    if (new Date(entry.payload.occurred_at!).getTime() > Date.now()) {
+      error = { field: null, message: 'The transaction time must not be in the future.' }
+      return
+    }
 
     submitting = true
     error = null
@@ -235,9 +249,28 @@
       <div class="row">
         <label class="field">
           <span class="label">Date</span>
-          <input type="date" bind:value={occurredOn} onchange={clearConfirmation} required />
+          <input type="date" bind:value={occurredOn} onchange={() => { offset = ''; clearConfirmation() }} required />
           <span class="hint faint">The date the transaction happened, not today.</span>
         </label>
+
+        <label class="field">
+          <span class="label">Time ({entryTimezone})</span>
+          <input type="time" step="60" bind:value={occurredTime}
+            onchange={() => { offset = ''; clearConfirmation() }} required />
+        </label>
+        <button type="button" onclick={setNow}>Set to now</button>
+        {#if timeOptions.length > 1}
+          <label class="field">
+            <span class="label">UTC offset</span>
+            <select bind:value={offset} required>
+              <option value="">Choose offset</option>
+              {#each timeOptions as option}
+                <option value={option.offset}>{option.offset}</option>
+              {/each}
+            </select>
+          </label>
+        {/if}
+        {#if entry.timeError}<p class="error" role="alert">{entry.timeError}</p>{/if}
 
         {#if shape !== 'trade'}
           <label class="field">

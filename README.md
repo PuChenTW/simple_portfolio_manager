@@ -63,6 +63,36 @@ posted event is corrected by `reverse_transaction`, never edited or deleted.
 Read the full valuation at `/api/v1/portfolios/PORTFOLIO_ID/summary`. Prices, quantities,
 and amounts are JSON decimal strings. All timestamps are UTC RFC 3339 values.
 
+### Transaction times and report timezones (0.11.0)
+
+Supplied transaction `occurred_at` values must include `Z` or an explicit offset.
+For example, `2026-09-17T07:00:00+08:00` equals `2026-09-16T23:00:00Z`.
+Omit the value to use server time. Future values return `transaction_time_in_future`,
+with `details.server_time`. Offset-free values return `validation_error`.
+Existing journal times retain their UTC interpretation.
+
+Date-based reports accept `report_timezone`, an IANA name such as `Asia/Taipei`.
+The default is `UTC` for both HTTP and MCP. Snapshot create and rebuild requests carry
+this field in their JSON body. Report reads carry it in the query string.
+Portfolio reads accept it to report the first event's local date.
+
+The dashboard stores a timezone preference in this browser. It defaults to following
+the browser timezone. Manual entries require a date and time. The initial time stays
+fixed until the user edits it or selects **Set to now**.
+Repeated daylight-saving times require an offset choice. Nonexistent times are refused.
+
+Current summaries replay through now. Historical reports stop before the next local
+midnight. Market dates remain exchange dates. Securities use completed regular sessions.
+Daily FX and crypto bars use completed UTC days to avoid using an unfinished daily close.
+Unknown markets also use completed UTC days.
+
+Migration `0010` labels existing snapshots `UTC` and separates snapshot identity by timezone.
+Calculation revision `v2` applies the completed-session pricing rule. Old `v1` snapshots remain
+stored, but reports do not mix them with `v2`. Rebuild the required dates explicitly.
+Changing the browser timezone does not create snapshots. Missing dates remain visible.
+The snapshot cron continues to build UTC snapshots. Build other timezones through the API,
+MCP, or the dashboard's snapshot controls.
+
 Ticker conventions are `AAPL` for US stocks, `2330.TW` for TWSE, `8069.TWO` for TPEX, and
 `BTC-USD` for crypto. A portfolio only accepts assets whose quote currency matches its base
 currency; use separate portfolios for TWD and USD holdings, then group them for a combined view.

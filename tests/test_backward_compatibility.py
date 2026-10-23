@@ -109,6 +109,10 @@ That choice makes the series a sum over a changing set of accounts, so every poi
 `contributing_account_count` and the response carries `account_entries`. Without them a rise
 where an account's records begin is indistinguishable from a gain. The summary needs no such
 field because one report covers one date and one membership.
+
+0.11.0 requires explicit offsets on supplied transaction times and refuses future times.
+Reports accept an IANA timezone. Snapshot and series responses identify that timezone.
+Portfolio first-event dates follow the requested report timezone. Defaults remain UTC.
 """
 
 import asyncio

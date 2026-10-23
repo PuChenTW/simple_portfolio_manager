@@ -79,6 +79,29 @@ async def test_read_write_round_trip(mcp_client) -> None:
     assert detail["balance"]["balanced"] is True
 
 
+async def test_timezone_reports_match_the_api(mcp_client) -> None:
+    portfolio = await create_portfolio(name="Timezone", base_currency="TWD")
+    await record_transaction(
+        portfolio_id=portfolio["id"], request_id="tz-deposit", transaction_type="deposit",
+        amount="1000", occurred_at="2020-09-17T01:00:00+08:00",
+    )
+    utc = await mcp_server.create_valuation_snapshot(portfolio["id"], "2020-09-16")
+    local = await mcp_server.create_valuation_snapshot(
+        portfolio["id"], "2020-09-16", report_timezone="Asia/Taipei"
+    )
+    assert utc["cash_value"] == "1000"
+    assert local["cash_value"] == "0"
+    history = await mcp_server.get_nav_history(
+        portfolio["id"], "2020-09-16", "2020-09-16", report_timezone="Asia/Taipei"
+    )
+    assert history["report_timezone"] == "Asia/Taipei"
+    assert history["snapshots"][0]["cash_value"] == "0"
+    with pytest.raises(ApiError) as excinfo:
+        await record_transaction(portfolio["id"], "tz-naive", "deposit",
+                                 amount="1", occurred_at="2020-09-17T01:00:00")
+    assert excinfo.value.code == "validation_error"
+
+
 async def test_domain_error_preserves_envelope(mcp_client) -> None:
     with pytest.raises(ApiError) as excinfo:
         await get_portfolio("does-not-exist")

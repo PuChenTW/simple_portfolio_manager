@@ -2,6 +2,8 @@
 // Parsing to Number is safe for display only -- never for arithmetic that feeds another value.
 // Any total shown here must come from a field the server computed.
 
+import { effectiveTimezone } from './timezone'
+
 const MONEY_FRACTION_DIGITS = 0
 
 export function money(value: string | null | undefined, currency: string): string {
@@ -71,6 +73,21 @@ export function safeWidth(value: string | null | undefined): number {
 }
 
 export function shortDate(value: string): string {
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.valueOf()) ? value : parsed.toLocaleDateString()
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(value)
+  const parsed = new Date(dateOnly ? `${value}T12:00:00Z` : utcTimestamp(value))
+  return Number.isNaN(parsed.valueOf()) ? value : parsed.toLocaleDateString(undefined, {
+    timeZone: dateOnly ? 'UTC' : effectiveTimezone(),
+  })
+}
+
+function utcTimestamp(value: string): string {
+  return /(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? value : `${value}Z`
+}
+
+export function dateTime(value: string): string {
+  const parsed = new Date(utcTimestamp(value))
+  return Number.isNaN(parsed.valueOf()) ? value : parsed.toLocaleString(undefined, {
+    timeZone: effectiveTimezone(), year: 'numeric', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  })
 }

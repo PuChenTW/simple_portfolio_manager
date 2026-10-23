@@ -2,7 +2,7 @@
   import { api, type JournalEvent, type JournalEventPage } from '../../api/client'
   import { PAGE_SIZE } from '../../account.svelte'
   import { errorFor } from '../../transactions'
-  import { money, quantity, shortDate } from '../../format'
+  import { dateTime, money, quantity, shortDate } from '../../format'
 
   let {
     page,
@@ -133,7 +133,7 @@
                 <span aria-hidden="true" class:open={expanded[event.id]}>›</span>
               </button>
             </td>
-            <th scope="row" class="date num">{shortDate(event.trade_date ?? event.occurred_at)}</th>
+            <th scope="row" class="date num">{dateTime(event.occurred_at)}</th>
             <td>
               <span class="type">{label(event)}</span>
               {#if event.reverses_event_id}

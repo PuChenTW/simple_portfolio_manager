@@ -16,11 +16,16 @@ function draft(values: Partial<TransactionDraft> = {}): TransactionDraft {
   return {
     type: 'buy', amount: '', quantity: '', unitPrice: '', ticker: '', fee: '', tax: '',
     settlementAmount: '', memo: '', sourceReference: '', occurredOn: '2026-09-16',
-    requestId: 'entry-1', ...values,
+    requestId: 'entry-1', occurredTime: '07:00', timezone: 'Asia/Taipei', ...values,
   }
 }
 
 describe('prepareEntry', () => {
+  it('requires a time and sends an explicit UTC timestamp', () => {
+    const entry = prepareEntry(draft({ type: 'deposit', amount: '1000' }), 'cash')
+    expect(entry.payload.occurred_at).toBe('2026-09-15T23:00:00Z')
+    expect(prepareEntry(draft({ occurredTime: '' }), 'cash').complete).toBe(false)
+  })
   it.each(['deposit', 'withdrawal', 'transfer_in', 'transfer_out'] as const)(
     'uses only cash fields after switching a trade to %s', (type) => {
       const input = draft({
@@ -32,7 +37,7 @@ describe('prepareEntry', () => {
       const entry = prepareEntry(input, 'investment')
       expect(entry.payload).toEqual({
         request_id: 'entry-1', transaction_type: type, amount: '1000',
-        occurred_at: '2026-09-16T00:00:00',
+        occurred_at: '2026-09-15T23:00:00Z',
       })
       expect(entry.effect).toBe(type === 'deposit' || type === 'transfer_in' ? 1000 : -1000)
       expect(entry.complete).toBe(true)
@@ -52,7 +57,7 @@ describe('prepareEntry', () => {
     expect(entry.payload).toEqual({
       request_id: 'entry-1', transaction_type: type, ticker: 'AAPL',
       quantity: '0.1234567890123456789', unit_price: '100.00', fee: '0.10', tax: '0.20',
-      occurred_at: '2026-09-16T00:00:00', memo: 'statement entry',
+      occurred_at: '2026-09-15T23:00:00Z', memo: 'statement entry',
       source_reference: 'confirmation-1',
     })
     expect(entry.complete).toBe(true)
@@ -67,7 +72,7 @@ describe('prepareEntry', () => {
     const dividend = prepareEntry(input, 'investment')
     expect(dividend.payload).toEqual({
       request_id: 'entry-1', transaction_type: 'dividend', amount: '100', tax: '30',
-      ticker: 'AAPL', occurred_at: '2026-09-16T00:00:00',
+      ticker: 'AAPL', occurred_at: '2026-09-15T23:00:00Z',
     })
     expect(dividend.effect).toBe(70)
     input.type = 'interest'
@@ -103,7 +108,7 @@ describe('prepareEntry', () => {
     }), 'investment')
     expect(entry.payload).toEqual({
       request_id: 'entry-1', transaction_type: 'dividend', amount: '100', tax: '0',
-      occurred_at: '2026-09-16T00:00:00',
+      occurred_at: '2026-09-15T23:00:00Z',
     })
     expect(entry.complete).toBe(true)
   })

@@ -543,9 +543,21 @@
      },
      "title": "Warnings",
      "type": "array"
+    },
+    "report_timezone": {
+     "default": "UTC",
+     "description": "IANA timezone for report date boundaries.",
+     "title": "Report Timezone",
+     "type": "string"
+    },
+    "valuation_as_of": {
+     "format": "date-time",
+     "title": "Valuation As Of",
+     "type": "string"
     }
    },
    "required": [
+    "valuation_as_of",
     "group_id",
     "group_name",
     "reporting_currency",
@@ -2420,8 +2432,8 @@
     "trade_date": {
      "anyOf": [
       {
-       "type": "string",
-       "format": "date-time"
+       "format": "date-time",
+       "type": "string"
       },
       {
        "type": "null"
@@ -2432,8 +2444,8 @@
     "settlement_date": {
      "anyOf": [
       {
-       "type": "string",
-       "format": "date-time"
+       "format": "date-time",
+       "type": "string"
       },
       {
        "type": "null"
@@ -2552,8 +2564,8 @@
     "quantity_delta": {
      "anyOf": [
       {
-       "type": "string",
-       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
       },
       {
        "type": "null"
@@ -2564,8 +2576,8 @@
     "amount_delta": {
      "anyOf": [
       {
-       "type": "string",
-       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
       },
       {
        "type": "null"
@@ -2576,8 +2588,8 @@
     "unit_price": {
      "anyOf": [
       {
-       "type": "string",
-       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
       },
       {
        "type": "null"
@@ -2588,8 +2600,8 @@
     "fx_rate": {
      "anyOf": [
       {
-       "type": "string",
-       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+       "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+       "type": "string"
       },
       {
        "type": "null"
@@ -2863,6 +2875,12 @@
      },
      "title": "Warnings",
      "type": "array"
+    },
+    "report_timezone": {
+     "default": "UTC",
+     "description": "IANA timezone for report date boundaries.",
+     "title": "Report Timezone",
+     "type": "string"
     }
    },
    "required": [
@@ -3065,6 +3083,12 @@
      ],
      "description": "Why XIRR is null, when it is. Never an opaque failure.",
      "title": "Xirr Unavailable Reason"
+    },
+    "report_timezone": {
+     "default": "UTC",
+     "description": "IANA timezone for report date boundaries.",
+     "title": "Report Timezone",
+     "type": "string"
     }
    },
    "required": [
@@ -3754,6 +3778,12 @@
      },
      "title": "Warnings",
      "type": "array"
+    },
+    "report_timezone": {
+     "default": "UTC",
+     "description": "IANA timezone for report date boundaries.",
+     "title": "Report Timezone",
+     "type": "string"
     }
    },
    "required": [
@@ -3787,6 +3817,12 @@
     "start_date": {
      "format": "date",
      "title": "Start Date",
+     "type": "string"
+    },
+    "report_timezone": {
+     "default": "UTC",
+     "description": "IANA timezone for report date boundaries.",
+     "title": "Report Timezone",
      "type": "string"
     }
    },
@@ -3880,6 +3916,12 @@
      "description": "The date to value, in the portfolio's terms. Must not be in the future.",
      "format": "date",
      "title": "Valuation Date",
+     "type": "string"
+    },
+    "report_timezone": {
+     "default": "UTC",
+     "description": "IANA timezone for report date boundaries.",
+     "title": "Report Timezone",
      "type": "string"
     }
    },
@@ -4007,6 +4049,12 @@
      },
      "title": "Warnings",
      "type": "array"
+    },
+    "report_timezone": {
+     "default": "UTC",
+     "description": "IANA timezone for report date boundaries.",
+     "title": "Report Timezone",
+     "type": "string"
     }
    },
    "required": [
@@ -4346,7 +4394,7 @@
        "type": "null"
       }
      ],
-     "description": "Defaults to server time.",
+     "description": "Offset or Z required. Omit for server time. Future times are refused.",
      "title": "Occurred At"
     },
     "quantity": {
@@ -5032,6 +5080,10 @@
      "path"
     ],
     [
+     "report_timezone",
+     "query"
+    ],
+    [
      "reporting_currency",
      "query"
     ]
@@ -5297,6 +5349,10 @@
      "path"
     ],
     [
+     "report_timezone",
+     "query"
+    ],
+    [
      "start_date",
      "query"
     ]
@@ -5332,6 +5388,10 @@
     [
      "portfolio_id",
      "path"
+    ],
+    [
+     "report_timezone",
+     "query"
     ]
    ],
    "path": "/api/v1/portfolios/{portfolio_id}",
@@ -5416,6 +5476,10 @@
     [
      "portfolio_id",
      "path"
+    ],
+    [
+     "report_timezone",
+     "query"
     ],
     [
      "start_date",
@@ -5713,7 +5777,12 @@
   },
   "list_portfolios": {
    "method": "get",
-   "parameters": [],
+   "parameters": [
+    [
+     "report_timezone",
+     "query"
+    ]
+   ],
    "path": "/api/v1/portfolios",
    "requestBody": null,
    "responses": {
@@ -6343,6 +6412,11 @@
     "valuation_date": {
      "title": "Valuation Date",
      "type": "string"
+    },
+    "report_timezone": {
+     "default": "UTC",
+     "title": "Report Timezone",
+     "type": "string"
     }
    },
    "required": [
@@ -6407,6 +6481,11 @@
      ],
      "default": null,
      "title": "Reporting Currency"
+    },
+    "report_timezone": {
+     "default": "UTC",
+     "title": "Report Timezone",
+     "type": "string"
     }
    },
    "required": [
@@ -6536,6 +6615,11 @@
     "start_date": {
      "title": "Start Date",
      "type": "string"
+    },
+    "report_timezone": {
+     "default": "UTC",
+     "title": "Report Timezone",
+     "type": "string"
     }
    },
    "required": [
@@ -6550,6 +6634,11 @@
    "properties": {
     "portfolio_id": {
      "title": "Portfolio Id",
+     "type": "string"
+    },
+    "report_timezone": {
+     "default": "UTC",
+     "title": "Report Timezone",
      "type": "string"
     }
    },
@@ -6589,6 +6678,11 @@
     },
     "start_date": {
      "title": "Start Date",
+     "type": "string"
+    },
+    "report_timezone": {
+     "default": "UTC",
+     "title": "Report Timezone",
      "type": "string"
     }
    },
@@ -6801,7 +6895,13 @@
    "type": "object"
   },
   "list_portfolios": {
-   "properties": {},
+   "properties": {
+    "report_timezone": {
+     "default": "UTC",
+     "title": "Report Timezone",
+     "type": "string"
+    }
+   },
    "title": "list_portfoliosArguments",
    "type": "object"
   },
@@ -6944,6 +7044,11 @@
     },
     "start_date": {
      "title": "Start Date",
+     "type": "string"
+    },
+    "report_timezone": {
+     "default": "UTC",
+     "title": "Report Timezone",
      "type": "string"
     }
    },
@@ -7413,5 +7518,5 @@
    "type": "object"
   }
  },
- "version": "0.10.0"
+ "version": "0.11.0"
 }

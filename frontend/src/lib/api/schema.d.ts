@@ -1124,6 +1124,17 @@ export interface components {
          * @description A group's holdings and cash expressed in one currency.
          */
         ConsolidatedSummaryRead: {
+            /**
+             * Report Timezone
+             * @description IANA timezone for report date boundaries.
+             * @default UTC
+             */
+            report_timezone: string;
+            /**
+             * Valuation As Of
+             * Format: date-time
+             */
+            valuation_as_of: string;
             /** Group Id */
             group_id: string;
             /** Group Name */
@@ -2009,6 +2020,12 @@ export interface components {
          * @description A daily value series with the coverage needed to judge whether it can be trusted.
          */
         NavHistoryRead: {
+            /**
+             * Report Timezone
+             * @description IANA timezone for report date boundaries.
+             * @default UTC
+             */
+            report_timezone: string;
             /** Portfolio Id */
             portfolio_id: string;
             /** Base Currency */
@@ -2104,6 +2121,12 @@ export interface components {
          *     questions and can disagree for the same past date.
          */
         NavSeriesRead: {
+            /**
+             * Report Timezone
+             * @description IANA timezone for report date boundaries.
+             * @default UTC
+             */
+            report_timezone: string;
             /** Group Id */
             group_id: string;
             /** Group Name */
@@ -2176,6 +2199,12 @@ export interface components {
          * @description Return over a period, with the method and the data quality behind it.
          */
         PerformanceRead: {
+            /**
+             * Report Timezone
+             * @description IANA timezone for report date boundaries.
+             * @default UTC
+             */
+            report_timezone: string;
             /** Portfolio Id */
             portfolio_id: string;
             /** Base Currency */
@@ -2542,6 +2571,12 @@ export interface components {
          * @description The outcome of a range rebuild, in enough detail to re-run it safely.
          */
         RebuildRead: {
+            /**
+             * Report Timezone
+             * @description IANA timezone for report date boundaries.
+             * @default UTC
+             */
+            report_timezone: string;
             /** Portfolio Id */
             portfolio_id: string;
             /**
@@ -2575,6 +2610,12 @@ export interface components {
          * @description Request to build snapshots across a date range.
          */
         RebuildRequest: {
+            /**
+             * Report Timezone
+             * @description IANA timezone for report date boundaries.
+             * @default UTC
+             */
+            report_timezone: string;
             /**
              * Start Date
              * Format: date
@@ -2613,6 +2654,12 @@ export interface components {
          */
         SnapshotCreate: {
             /**
+             * Report Timezone
+             * @description IANA timezone for report date boundaries.
+             * @default UTC
+             */
+            report_timezone: string;
+            /**
              * Valuation Date
              * Format: date
              * @description The date to value, in the portfolio's terms. Must not be in the future.
@@ -2630,6 +2677,12 @@ export interface components {
          * @description A portfolio's value on one date, priced only with data available at that time.
          */
         SnapshotRead: {
+            /**
+             * Report Timezone
+             * @description IANA timezone for report date boundaries.
+             * @default UTC
+             */
+            report_timezone: string;
             /** Id */
             id: string;
             /** Portfolio Id */
@@ -2884,7 +2937,7 @@ export interface components {
             settlement_amount?: number | string | null;
             /**
              * Occurred At
-             * @description Defaults to server time.
+             * @description Offset or Z required. Omit for server time. Future times are refused.
              */
             occurred_at?: string | null;
             /** Trade Date */
@@ -3111,7 +3164,9 @@ export interface operations {
     };
     list_portfolios: {
         parameters: {
-            query?: never;
+            query?: {
+                report_timezone?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -3182,7 +3237,9 @@ export interface operations {
     };
     get_portfolio: {
         parameters: {
-            query?: never;
+            query?: {
+                report_timezone?: string;
+            };
             header?: never;
             path: {
                 /** @description Portfolio UUID returned by `create_portfolio`. */
@@ -4505,6 +4562,7 @@ export interface operations {
                 start_date: string;
                 /** @description Last valuation date, inclusive. */
                 end_date: string;
+                report_timezone?: string;
             };
             header?: never;
             path: {
@@ -4544,6 +4602,7 @@ export interface operations {
                 end_date: string;
                 /** @description Return the per-day series as well as the period totals. */
                 include_daily?: boolean;
+                report_timezone?: string;
             };
             header?: never;
             path: {
@@ -4791,6 +4850,7 @@ export interface operations {
     get_consolidated_summary: {
         parameters: {
             query?: {
+                report_timezone?: string;
                 /** @description Report date. Omit for today. Never uses later data. */
                 as_of?: string | null;
                 /** @description Override the group's own reporting currency. */
@@ -4828,6 +4888,7 @@ export interface operations {
     get_consolidated_nav_history: {
         parameters: {
             query?: {
+                report_timezone?: string;
                 /** @description First date, inclusive. Omit to start at the earliest snapshot. */
                 start_date?: string | null;
                 /** @description Last date, inclusive. Omit to end at the latest snapshot. */

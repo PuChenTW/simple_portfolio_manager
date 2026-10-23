@@ -35,6 +35,7 @@ from .models import (
     PortfolioGroup,
     PortfolioGroupMember,
 )
+from .report_time import ReportTime, completed_price_date
 from .schemas import utc_now
 from .services import ZERO, get_portfolio
 from .taxonomy import AssetClass, Provenance
@@ -121,6 +122,7 @@ class ConsolidatedSummary:
     converted_value_coverage_percent: Decimal
     fx_rates_used: list[Conversion]
     calculation_method: str
+    valuation_as_of: datetime
     warnings: list[str] = field(default_factory=list)
 
 
@@ -261,27 +263,24 @@ def build_consolidated_summary(
     *,
     as_of: date | None = None,
     reporting_currency: str | None = None,
+    report_timezone: str = "UTC",
 ) -> ConsolidatedSummary:
     """Value every portfolio in the group and express the result in one currency."""
     group = get_group(session, group_id)
-    valuation_date = as_of or utc_now().date()
-    if valuation_date > utc_now().date():
-        raise DomainError(
-            422,
-            "valuation_date_in_future",
-            "A group cannot be valued on a date that has not happened",
-            {"as_of": valuation_date.isoformat()},
-        )
+    clock = ReportTime(report_timezone)
+    now = utc_now()
+    valuation_date = as_of or clock.today(now)
+    cutoff = clock.cutoff(valuation_date, now)
 
     currency = (reporting_currency or group.reporting_currency).upper()
-    portfolio_ids = member_portfolio_ids(session, group_id, valuation_date)
+    portfolio_ids = sorted({row.portfolio_id for row in _members_at(session, group_id, cutoff)})
     warnings: list[str] = []
     if not portfolio_ids:
         warnings.append(
             f"No portfolio was a member of this group on {valuation_date.isoformat()}"
         )
 
-    fx = FxService(session, provider)
+    fx = FxService(session, provider, cutoff=cutoff)
     pricer = HistoricalPricer(provider)
     rates: dict[str, Conversion] = {}
     positions: list[ConsolidatedPosition] = []
@@ -298,7 +297,7 @@ def build_consolidated_summary(
         portfolio = session.get(Portfolio, portfolio_id)
         if portfolio is None:
             continue
-        state = _state_of(session, portfolio_id, valuation_date)
+        state = _state_of(session, portfolio_id, cutoff)
         cash_local[portfolio.base_currency] = (
             cash_local.get(portfolio.base_currency, ZERO) + state.cash
         )
@@ -311,7 +310,7 @@ def build_consolidated_summary(
             if holding.quantity <= ZERO:
                 continue
             row, converted, missing = _consolidate_position(
-                session, portfolio, holding, pricer, fx, currency, valuation_date, rates
+                session, portfolio, holding, pricer, fx, currency, valuation_date, rates, cutoff
             )
             positions.append(row)
             if converted is not None:
@@ -345,6 +344,7 @@ def build_consolidated_summary(
         group_name=group.name,
         reporting_currency=currency,
         as_of=valuation_date,
+        valuation_as_of=cutoff,
         portfolio_ids=portfolio_ids,
         positions=_weighted(positions, total_value),
         cash_by_currency=cash_totals,
@@ -398,10 +398,13 @@ def _consolidate_position(
     currency: str,
     valuation_date: date,
     rates: dict[str, Conversion],
+    cutoff: datetime,
 ) -> tuple[ConsolidatedPosition, Decimal | None, UnconvertedAmount | None]:
     instrument = session.get(Instrument, holding.ticker)
     local_currency = instrument.currency if instrument else portfolio.base_currency
-    price = pricer.price_at(holding.ticker, valuation_date)
+    market = instrument.market if instrument else ""
+    price_date = min(valuation_date, completed_price_date(cutoff, market))
+    price = pricer.price_at(holding.ticker, price_date)
     warnings: list[str] = []
 
     local_value = holding.quantity * price.price if price else None
@@ -615,10 +618,10 @@ def _describe(
             )
 
 
-def _state_of(session: Session, portfolio_id: str, valuation_date: date):
+def _state_of(session: Session, portfolio_id: str, cutoff: datetime):
     from .replay import replay_state
 
-    return replay_state(session, portfolio_id, _end_of_day(valuation_date))
+    return replay_state(session, portfolio_id, cutoff)
 
 
 def _members_at(

@@ -40,7 +40,7 @@ def test_snapshot_round_trip_over_http(harness, held) -> None:
     body = response.json()
 
     assert body["status"] in {"complete", "partial"}
-    assert body["calculation_version"] == "v1"
+    assert body["calculation_version"] == "v2"
     assert body["calculation_method"], "every derived value states how it was produced"
     assert Decimal(body["cash_value"]) == Decimal("3600")
     assert len(body["positions"]) == 1

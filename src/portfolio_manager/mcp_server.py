@@ -41,6 +41,8 @@ ERROR_CODES = {
     "invalid_amount": "amount must be positive; direction comes from the transaction type.",
     "invalid_classification_value": "Not a member of the taxonomy; see portfolio://taxonomy.",
     "invalid_date_range": "start_date is after end_date, or the range is unusable.",
+    "invalid_report_timezone": "Use a valid IANA report timezone.",
+    "transaction_time_in_future": "occurred_at exceeds server time; details include server_time.",
     "invalid_tag": "The tag is empty or longer than 50 characters.",
     "journal_out_of_balance": "The legs do not net to zero; a position cannot come from nothing.",
     "market_data_unavailable": "No usable quote or history exists, cached or live.",
@@ -151,15 +153,16 @@ async def create_portfolio(name: str, base_currency: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def list_portfolios() -> list[dict[str, Any]]:
+async def list_portfolios(report_timezone: str = "UTC") -> list[dict[str, Any]]:
     """List all portfolios so you can discover IDs instead of guessing or creating duplicates."""
-    return await _request("GET", "/api/v1/portfolios")
+    return await _request("GET", "/api/v1/portfolios", params={"report_timezone": report_timezone})
 
 
 @mcp.tool()
-async def get_portfolio(portfolio_id: str) -> dict[str, Any]:
+async def get_portfolio(portfolio_id: str, report_timezone: str = "UTC") -> dict[str, Any]:
     """Get portfolio metadata; read the currency invariant before choosing a ticker to trade."""
-    return await _request("GET", f"/api/v1/portfolios/{portfolio_id}")
+    return await _request("GET", f"/api/v1/portfolios/{portfolio_id}",
+                          params={"report_timezone": report_timezone})
 
 
 @mcp.tool()
@@ -765,6 +768,7 @@ async def create_valuation_snapshot(
     portfolio_id: str,
     valuation_date: str,
     force_revision: bool = False,
+    report_timezone: str = "UTC",
 ) -> dict[str, Any]:
     """Record what a portfolio was worth on one date, priced with data available then.
 
@@ -779,7 +783,8 @@ async def create_valuation_snapshot(
     price on that date: it is excluded from `securities_value` and carried at cost in
     `unpriced_market_value`, so the total understates the portfolio by an amount you can see.
     """
-    payload = {"valuation_date": valuation_date, "force_revision": force_revision}
+    payload = {"valuation_date": valuation_date, "force_revision": force_revision,
+               "report_timezone": report_timezone}
     return await _request(
         "POST", f"/api/v1/portfolios/{portfolio_id}/valuation-snapshots", json=payload
     )
@@ -791,6 +796,7 @@ async def rebuild_valuation_snapshots(
     start_date: str,
     end_date: str,
     force_revision: bool = False,
+    report_timezone: str = "UTC",
 ) -> dict[str, Any]:
     """Build a range of daily snapshots as a re-runnable job.
 
@@ -806,6 +812,7 @@ async def rebuild_valuation_snapshots(
         "start_date": start_date,
         "end_date": end_date,
         "force_revision": force_revision,
+        "report_timezone": report_timezone,
     }
     return await _request(
         "POST", f"/api/v1/portfolios/{portfolio_id}/valuation-snapshots/rebuild", json=payload
@@ -817,6 +824,7 @@ async def get_nav_history(
     portfolio_id: str,
     start_date: str,
     end_date: str,
+    report_timezone: str = "UTC",
 ) -> dict[str, Any]:
     """Read the stored daily value series for a date range.
 
@@ -827,7 +835,8 @@ async def get_nav_history(
     Before drawing conclusions from the series, check `missing_dates`, `partial_snapshots`, and
     `warnings`. A series with gaps or partial days is not a valid basis for comparing periods.
     """
-    params = {"start_date": start_date, "end_date": end_date}
+    params = {"start_date": start_date, "end_date": end_date,
+              "report_timezone": report_timezone}
     return await _request("GET", f"/api/v1/portfolios/{portfolio_id}/nav-history", params=params)
 
 
@@ -837,6 +846,7 @@ async def get_portfolio_performance(
     start_date: str,
     end_date: str,
     include_daily: bool = False,
+    report_timezone: str = "UTC",
 ) -> dict[str, Any]:
     """Measure how a portfolio performed between two dates.
 
@@ -866,6 +876,7 @@ async def get_portfolio_performance(
         "start_date": start_date,
         "end_date": end_date,
         "include_daily": include_daily,
+        "report_timezone": report_timezone,
     }
     return await _request("GET", f"/api/v1/portfolios/{portfolio_id}/performance", params=params)
 
@@ -955,6 +966,7 @@ async def get_consolidated_summary(
     group_id: str,
     as_of: str | None = None,
     reporting_currency: str | None = None,
+    report_timezone: str = "UTC",
 ) -> dict[str, Any]:
     """Total a group's holdings and cash across currencies.
 
@@ -971,7 +983,7 @@ async def get_consolidated_summary(
     `issuer_exposure` combines listings of the same company, so an ADR and its local line read as
     one economic exposure while remaining separate positions.
     """
-    params: dict[str, Any] = {}
+    params: dict[str, Any] = {"report_timezone": report_timezone}
     if as_of is not None:
         params["as_of"] = as_of
     if reporting_currency is not None:
@@ -985,6 +997,7 @@ async def get_consolidated_nav_history(
     start_date: str | None = None,
     end_date: str | None = None,
     reporting_currency: str | None = None,
+    report_timezone: str = "UTC",
 ) -> dict[str, Any]:
     """Read a group's total value over time, converted into one currency.
 
@@ -1007,7 +1020,7 @@ async def get_consolidated_nav_history(
     series must be complete. Check `partial_points` and each point's
     `converted_value_coverage_percent` before quoting a figure.
     """
-    params: dict[str, Any] = {}
+    params: dict[str, Any] = {"report_timezone": report_timezone}
     if start_date is not None:
         params["start_date"] = start_date
     if end_date is not None:
@@ -1062,7 +1075,13 @@ Each portfolio has exactly one `base_currency` and rejects any instrument quoted
 
 Send every financial value as a decimal string (`"10.5"`, not `10.5`); responses return decimals
 as strings too. Binary floats are never used in accounting paths. Timestamps are UTC RFC 3339.
-Omitted event times default to server time — pass `occurred_at` explicitly when recording history.
+Omitted event times default to server time. Supplied transaction `occurred_at` needs Z or an
+explicit offset. Future transaction times are refused with `details.server_time`.
+Report date boundaries use `report_timezone`, an IANA name defaulting to UTC. Snapshot writes
+carry it in the body. Report reads carry it in query parameters. Snapshot revision v2 uses
+completed sessions for securities and completed UTC days for FX, crypto, and unknown markets.
+Snapshots from different timezones or calculation revisions are never mixed. Rebuild the dates
+in the required timezone before reading a series. Existing journal timestamps are not shifted.
 
 ## Idempotency
 

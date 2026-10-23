@@ -410,6 +410,7 @@ class PortfolioValuationSnapshot(Base):
             "portfolio_id",
             "valuation_date",
             "calculation_version",
+            "report_timezone",
             name="uq_valuation_snapshot_revision",
         ),
         Index("ix_valuation_snapshots_portfolio_date", "portfolio_id", "valuation_date"),
@@ -421,6 +422,9 @@ class PortfolioValuationSnapshot(Base):
     )
     valuation_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     valuation_as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    report_timezone: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="UTC", server_default="UTC"
+    )
     base_currency: Mapped[str] = mapped_column(String(3), nullable=False)
     securities_value: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)
     unpriced_market_value: Mapped[Decimal] = mapped_column(DecimalText(), nullable=False)

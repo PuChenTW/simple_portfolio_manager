@@ -1,4 +1,5 @@
 import type { components } from './schema'
+import { effectiveTimezone } from '../timezone'
 
 type Schemas = components['schemas']
 
@@ -168,7 +169,10 @@ async function toApiError(response: Response): Promise<ApiError> {
   try {
     const body = await response.json()
     const detail = body?.detail ?? body
-    return new ApiError(response.status, detail?.code ?? 'unknown', detail?.message ?? fallback)
+    const serverTime = detail?.details?.server_time
+    const message = detail?.message ?? fallback
+    return new ApiError(response.status, detail?.code ?? 'unknown',
+      serverTime ? `${message}. Server time: ${serverTime}` : message)
   } catch {
     return new ApiError(response.status, 'unknown', fallback)
   }
@@ -177,8 +181,8 @@ async function toApiError(response: Response): Promise<ApiError> {
 export const api = {
   listGroups: () => get<Group[]>('portfolio-groups'),
   groupSummary: (groupId: string) =>
-    get<ConsolidatedSummary>(`portfolio-groups/${encodeURIComponent(groupId)}/summary`),
-  listPortfolios: () => get<Portfolio[]>('portfolios'),
+    get<ConsolidatedSummary>(`portfolio-groups/${encodeURIComponent(groupId)}/summary` + query({ report_timezone: effectiveTimezone() })),
+  listPortfolios: () => get<Portfolio[]>('portfolios' + query({ report_timezone: effectiveTimezone() })),
 
   /** The group's net worth over time, fetched whole.
    *
@@ -191,7 +195,7 @@ export const api = {
    * `contributing_account_count` -- see docs/adr/0001-nav-series-uses-current-membership.md.
    */
   groupNavSeries: (groupId: string) =>
-    get<NavSeries>(`portfolio-groups/${encodeURIComponent(groupId)}/nav-history`),
+    get<NavSeries>(`portfolio-groups/${encodeURIComponent(groupId)}/nav-history` + query({ report_timezone: effectiveTimezone() })),
 
   // --- One account -----------------------------------------------------------------------
   //
@@ -201,7 +205,7 @@ export const api = {
   // ConsolidatedPositionRead at all, and its values would carry a converted currency.
 
   portfolio: (portfolioId: string) =>
-    get<Portfolio>(`portfolios/${encodeURIComponent(portfolioId)}`),
+    get<Portfolio>(`portfolios/${encodeURIComponent(portfolioId)}` + query({ report_timezone: effectiveTimezone() })),
 
   portfolioSummary: (portfolioId: string) =>
     get<PortfolioSummary>(`portfolios/${encodeURIComponent(portfolioId)}/summary`),
@@ -224,13 +228,13 @@ export const api = {
   performance: (portfolioId: string, startDate: string, endDate: string) =>
     get<Performance>(
       `portfolios/${encodeURIComponent(portfolioId)}/performance` +
-        query({ start_date: startDate, end_date: endDate }),
+        query({ start_date: startDate, end_date: endDate, report_timezone: effectiveTimezone() }),
     ),
 
   navHistory: (portfolioId: string, startDate: string, endDate: string) =>
     get<NavHistory>(
       `portfolios/${encodeURIComponent(portfolioId)}/nav-history` +
-        query({ start_date: startDate, end_date: endDate }),
+        query({ start_date: startDate, end_date: endDate, report_timezone: effectiveTimezone() }),
     ),
 
   /** Build snapshots across one date range.
@@ -249,6 +253,7 @@ export const api = {
       start_date: startDate,
       end_date: endDate,
       force_revision: force,
+      report_timezone: effectiveTimezone(),
     }),
 
   /** Post one balanced event -- legs, position, and settlement cash -- in one transaction.

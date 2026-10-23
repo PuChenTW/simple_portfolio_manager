@@ -126,6 +126,50 @@ def test_upgrade_backfills_portfolio_kind_for_existing_rows(database_url: str) -
     assert row[1] is None, "the institution behind an old portfolio is unknown, not invented"
 
 
+def test_timezone_migration_preserves_snapshot_values_and_positions(database_url: str) -> None:
+    config = alembic_config(database_url)
+    command.upgrade(config, "0009")
+    engine = create_sqlite_engine(database_url)
+    metadata = sa.MetaData()
+    metadata.reflect(engine)
+    now = datetime(2020, 9, 16, tzinfo=UTC)
+    with engine.begin() as connection:
+        connection.execute(metadata.tables["portfolios"].insert(), {
+            "id": "legacy", "name": "Legacy", "base_currency": "USD",
+            "kind": "investment", "created_at": now,
+        })
+        connection.execute(metadata.tables["portfolio_valuation_snapshots"].insert(), {
+            "id": "snapshot", "portfolio_id": "legacy", "valuation_date": now,
+            "valuation_as_of": now, "base_currency": "USD", "securities_value": "100",
+            "unpriced_market_value": "0", "cash_value": "200", "total_value": "300",
+            "cost_basis": "80", "external_flow_amount": "0", "income_amount": "0",
+            "fee_amount": "0", "tax_amount": "0", "pricing_coverage_percent": "100",
+            "positions_total": 1, "positions_priced": 1, "calculation_version": "v1",
+            "status": "complete", "created_at": now,
+        })
+        connection.execute(metadata.tables["position_valuation_snapshots"].insert(), {
+            "id": "position", "portfolio_snapshot_id": "snapshot", "instrument_id": "instrument",
+            "ticker_at_time": "AAPL", "valuation_date": now, "quantity": "1",
+            "average_cost": "80", "cost_basis": "80", "local_currency": "USD",
+            "price": "100", "market_value": "100", "price_stale": False,
+        })
+    engine.dispose()
+    command.upgrade(config, "head")
+    engine = create_sqlite_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            row = connection.execute(sa.text(
+                "SELECT report_timezone, total_value, calculation_version "
+                "FROM portfolio_valuation_snapshots WHERE id='snapshot'"
+            )).one()
+            assert tuple(row) == ("UTC", "300", "v1")
+            assert connection.scalar(sa.text(
+                "SELECT count(*) FROM position_valuation_snapshots WHERE id='position'"
+            )) == 1
+    finally:
+        engine.dispose()
+
+
 def test_migrated_schema_matches_the_orm_models(database_url: str) -> None:
     """Guards the split brain where models.py and alembic/versions drift apart.
 

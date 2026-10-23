@@ -75,7 +75,9 @@ def get_portfolio(session: Session, portfolio_id: str) -> Portfolio:
     return portfolio
 
 
-def first_event_dates(session: Session, portfolio_ids: list[str]) -> dict[str, date]:
+def first_event_dates(
+    session: Session, portfolio_ids: list[str], report_timezone: str = "UTC",
+) -> dict[str, date]:
     """Earliest event date per portfolio, for the whole page in one query.
 
     A per-row `MIN` would make listing cost a query per portfolio, which is the same N+1 that
@@ -84,6 +86,9 @@ def first_event_dates(session: Session, portfolio_ids: list[str]) -> dict[str, d
     are absent from the result rather than mapped to a placeholder date -- the caller reports
     them as null.
     """
+    from .report_time import report_zone
+
+    zone = report_zone(report_timezone)
     if not portfolio_ids:
         return {}
     rows = session.execute(
@@ -91,17 +96,24 @@ def first_event_dates(session: Session, portfolio_ids: list[str]) -> dict[str, d
         .where(JournalEvent.portfolio_id.in_(portfolio_ids))
         .group_by(JournalEvent.portfolio_id)
     ).all()
-    return {portfolio_id: _aware(earliest).date() for portfolio_id, earliest in rows}
+    return {
+        portfolio_id: _aware(earliest).astimezone(zone).date() for portfolio_id, earliest in rows
+    }
 
 
-def portfolio_payload(session: Session, portfolio: Portfolio) -> PortfolioRead:
+def portfolio_payload(
+    session: Session, portfolio: Portfolio, report_timezone: str = "UTC",
+) -> PortfolioRead:
     """Serialize one portfolio, resolving where its history starts."""
-    return _portfolio_payload(portfolio, first_event_dates(session, [portfolio.id]))
+    dates = first_event_dates(session, [portfolio.id], report_timezone)
+    return _portfolio_payload(portfolio, dates)
 
 
-def portfolio_payloads(session: Session, portfolios: list[Portfolio]) -> list[PortfolioRead]:
+def portfolio_payloads(
+    session: Session, portfolios: list[Portfolio], report_timezone: str = "UTC",
+) -> list[PortfolioRead]:
     """Serialize a list, resolving every portfolio's first event date in one query."""
-    dates = first_event_dates(session, [portfolio.id for portfolio in portfolios])
+    dates = first_event_dates(session, [portfolio.id for portfolio in portfolios], report_timezone)
     return [_portfolio_payload(portfolio, dates) for portfolio in portfolios]
 
 

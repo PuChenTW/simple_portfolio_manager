@@ -1,3 +1,6 @@
+import { Temporal } from '@js-temporal/polyfill'
+import { today } from './snapshots'
+import { effectiveTimezone } from './timezone'
 import {
   api,
   type JournalEventPage,
@@ -29,17 +32,7 @@ export const PAGE_SIZE = 25
  * This is deliberately the same range the `1y` preset produces, so the tab opens with that
  * preset highlighted rather than with no preset selected over a range one of them describes. */
 function defaultRange(): { start: string; end: string } {
-  const end = new Date()
-  const start = new Date(end)
-  start.setFullYear(start.getFullYear() - 1)
-  return { start: iso(start), end: iso(end) }
-}
-
-/** `YYYY-MM-DD` in local time. `toISOString` would shift the date across a timezone boundary. */
-function iso(value: Date): string {
-  const month = String(value.getMonth() + 1).padStart(2, '0')
-  const day = String(value.getDate()).padStart(2, '0')
-  return `${value.getFullYear()}-${month}-${day}`
+  return presetRange('1y', null)
 }
 
 export type RangePresetId = 'ytd' | '1y' | '3y' | '5y' | 'all'
@@ -67,18 +60,13 @@ export function presetRange(
   id: RangePresetId,
   firstEventDate: string | null,
 ): { start: string; end: string } {
-  const today = new Date()
-  const start = new Date(today)
-
-  if (id === 'ytd') start.setMonth(0, 1)
-  else if (id === '1y') start.setFullYear(start.getFullYear() - 1)
-  else if (id === '3y') start.setFullYear(start.getFullYear() - 3)
-  else if (id === '5y') start.setFullYear(start.getFullYear() - 5)
-
-  const wanted = id === 'all' ? (firstEventDate ?? iso(start)) : iso(start)
+  const end = Temporal.PlainDate.from(today())
+  const years = { ytd: 0, '1y': 1, '3y': 3, '5y': 5, all: 0 }[id]
+  const start = id === 'ytd' ? end.with({ month: 1, day: 1 }) : end.subtract({ years })
+  const wanted = id === 'all' ? (firstEventDate ?? start.toString()) : start.toString()
   // String comparison is correct and cheap here: `YYYY-MM-DD` sorts lexicographically.
   const clamped = firstEventDate && wanted < firstEventDate ? firstEventDate : wanted
-  return { start: clamped, end: iso(today) }
+  return { start: clamped, end: end.toString() }
 }
 
 
@@ -91,6 +79,7 @@ export function presetRange(
  * returning to a tab is instant.
  */
 export class AccountState {
+  #timezone = ''
   portfolioId = $state<string | null>(null)
 
   identity = $state<Load<Portfolio>>(idle())
@@ -118,7 +107,9 @@ export class AccountState {
 
   /** Point the page at an account. A repeat call for the same id keeps what is already loaded. */
   open(portfolioId: string): void {
-    if (this.portfolioId === portfolioId) return
+    const zone = effectiveTimezone()
+    if (this.portfolioId === portfolioId && this.#timezone === zone) return
+    this.#timezone = zone
 
     this.#seq += 1
     this.portfolioId = portfolioId

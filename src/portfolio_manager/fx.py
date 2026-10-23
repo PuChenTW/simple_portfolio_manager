@@ -81,10 +81,12 @@ class FxService:
         provider: MarketProvider,
         *,
         lookback_days: int = 30,
+        cutoff: datetime | None = None,
     ) -> None:
         self.session = session
         self.provider = provider
         self.lookback_days = lookback_days
+        self.cutoff = cutoff
         self._failed: set[tuple[str, str]] = set()
         # Ranges already fetched in full by `prefetch_range`, so a date inside one is known to
         # have every bar the provider has. Without this, a weekend or a holiday inside the range
@@ -95,6 +97,10 @@ class FxService:
         self, base: str, quote: str, as_of: date
     ) -> Conversion | FxUnavailable:
         """The rate to multiply a `base` amount by to express it in `quote`, as of a date."""
+        if self.cutoff is not None:
+            from .report_time import completed_price_date
+
+            as_of = min(as_of, completed_price_date(self.cutoff))
         base, quote = base.upper(), quote.upper()
         if base == quote:
             return Conversion(

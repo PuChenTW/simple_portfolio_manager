@@ -694,7 +694,19 @@ class TransactionCreate(ApiModel):
             "an exact amount; the event must still balance."
         ),
     )
-    occurred_at: datetime | None = Field(default=None, description="Defaults to server time.")
+    occurred_at: datetime | None = Field(
+        default=None,
+        description="Offset or Z required. Omit for server time. Future times are refused.",
+    )
+
+    @field_validator("occurred_at")
+    @classmethod
+    def validate_occurred_at(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("occurred_at requires a timezone offset or Z")
+        return value.astimezone(UTC)
     trade_date: datetime | None = None
     settlement_date: datetime | None = None
     source_reference: str | None = Field(
@@ -971,7 +983,13 @@ class CorporateActionApplicationRead(ApiModel):
     created_at: datetime
 
 
-class SnapshotCreate(ApiModel):
+class TimezoneReport(ApiModel):
+    report_timezone: str = Field(
+        default="UTC", description="IANA timezone for report date boundaries."
+    )
+
+
+class SnapshotCreate(TimezoneReport):
     """Request to value one portfolio on one date."""
 
     valuation_date: date = Field(
@@ -1011,7 +1029,7 @@ class PositionSnapshotRead(ApiModel):
     warnings: list[str]
 
 
-class SnapshotRead(ApiModel):
+class SnapshotRead(TimezoneReport):
     """A portfolio's value on one date, priced only with data available at that time."""
 
     id: str
@@ -1062,7 +1080,7 @@ class SnapshotSummary(ApiModel):
     status: str
 
 
-class NavHistoryRead(ApiModel):
+class NavHistoryRead(TimezoneReport):
     """A daily value series with the coverage needed to judge whether it can be trusted."""
 
     portfolio_id: str
@@ -1079,7 +1097,7 @@ class NavHistoryRead(ApiModel):
     warnings: list[str]
 
 
-class RebuildRequest(ApiModel):
+class RebuildRequest(TimezoneReport):
     """Request to build snapshots across a date range."""
 
     start_date: date
@@ -1090,7 +1108,7 @@ class RebuildRequest(ApiModel):
     )
 
 
-class RebuildRead(ApiModel):
+class RebuildRead(TimezoneReport):
     """The outcome of a range rebuild, in enough detail to re-run it safely."""
 
     portfolio_id: str
@@ -1134,7 +1152,7 @@ class PerformanceCoverageRead(ApiModel):
     warnings: list[str]
 
 
-class PerformanceRead(ApiModel):
+class PerformanceRead(TimezoneReport):
     """Return over a period, with the method and the data quality behind it."""
 
     portfolio_id: str
@@ -1276,9 +1294,10 @@ class UnconvertedAmountRead(ApiModel):
     reason: str
 
 
-class ConsolidatedSummaryRead(ApiModel):
+class ConsolidatedSummaryRead(TimezoneReport):
     """A group's holdings and cash expressed in one currency."""
 
+    valuation_as_of: datetime
     group_id: str
     group_name: str
     reporting_currency: str
@@ -1358,7 +1377,7 @@ class AccountEntryRead(ApiModel):
     entered_on: date
 
 
-class NavSeriesRead(ApiModel):
+class NavSeriesRead(TimezoneReport):
     """A group's value over time, with what each point covers.
 
     The series sums the group's *current* members across their whole history, unlike

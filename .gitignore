@@ -21,4 +21,6 @@ docs
 # produced by `bun run build` in frontend/ and baked into the image at Docker build time. The
 # app serves every endpoint without it, so a fresh checkout runs before the frontend is built.
 node_modules/
+frontend/test-results/
+frontend/playwright-report/
 src/portfolio_manager/static/

@@ -10,9 +10,21 @@
   import Classification from './lib/components/Classification.svelte'
   import AccountPage from './lib/components/account/AccountPage.svelte'
   import ThemeToggle from './lib/components/ThemeToggle.svelte'
+  import TimezoneSettings from './lib/components/TimezoneSettings.svelte'
+  import { timezone } from './lib/timezone.svelte'
+  import { untrack } from 'svelte'
   import Skeleton from './lib/components/Skeleton.svelte'
 
   dashboard.load()
+
+  let previousTimezone = timezone.effective
+  $effect(() => {
+    const current = timezone.effective
+    if (current !== previousTimezone) {
+      previousTimezone = current
+      untrack(() => { void dashboard.reload() })
+    }
+  })
 
   function onSwitch(event: Event) {
     const target = event.currentTarget as HTMLSelectElement
@@ -30,7 +42,10 @@
   )
 </script>
 
+<svelte:window onfocus={() => timezone.checkBrowser()} />
+
 <div class="shell">
+  <TimezoneSettings />
   <!-- The account page carries its own heading and breadcrumb. Repeating the group header above
        it would name a group whose numbers are not the ones on screen, and the switcher would
        imply it changes a single account's figures, which it does not. -->
@@ -87,12 +102,14 @@
   <!-- An account reads its own endpoints, so it must not wait on the group summary or be
        blocked by "no groups yet" -- an account can exist before it belongs to any group. -->
   {#if router.route.name === 'account'}
+    {#key timezone.effective}
     <AccountPage
       portfolioId={router.route.id}
       tab={router.route.tab}
       groupName={dashboard.selectedGroup?.name ?? null}
       onchange={() => dashboard.reload()}
     />
+    {/key}
   {:else if dashboard.loading}
     <Skeleton elapsed={dashboard.elapsed} />
   {:else if dashboard.error}

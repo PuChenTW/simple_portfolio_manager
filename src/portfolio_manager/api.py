@@ -316,7 +316,7 @@ AGENT_SKILL_METADATA = {
 
 app = FastAPI(
     title="Local Portfolio Manager",
-    version="0.10.0",
+    version="0.11.0",
     summary="Agent-friendly accounting for cash, stocks, and crypto portfolios",
     description=API_DESCRIPTION,
     openapi_tags=OPENAPI_TAGS,
@@ -453,10 +453,10 @@ def add_portfolio(data: PortfolioCreate, session: SessionDep) -> PortfolioRead:
     response_description="Portfolios ordered by creation time",
     tags=["portfolios"],
 )
-def list_portfolios(session: SessionDep) -> list[PortfolioRead]:
+def list_portfolios(session: SessionDep, report_timezone: str = "UTC") -> list[PortfolioRead]:
     """Use this to discover portfolio IDs instead of guessing or creating duplicates."""
     portfolios = list(session.scalars(select(Portfolio).order_by(Portfolio.created_at)).all())
-    return portfolio_payloads(session, portfolios)
+    return portfolio_payloads(session, portfolios, report_timezone)
 
 
 @app.get(
@@ -468,9 +468,11 @@ def list_portfolios(session: SessionDep) -> list[PortfolioRead]:
     responses={404: {"model": ErrorResponse, "description": "`portfolio_not_found`."}},
     tags=["portfolios"],
 )
-def read_portfolio(portfolio_id: PortfolioId, session: SessionDep) -> PortfolioRead:
+def read_portfolio(
+    portfolio_id: PortfolioId, session: SessionDep, report_timezone: str = "UTC",
+) -> PortfolioRead:
     """Read the currency invariant before selecting a ticker for a trade."""
-    return portfolio_payload(session, get_portfolio(session, portfolio_id))
+    return portfolio_payload(session, get_portfolio(session, portfolio_id), report_timezone)
 
 
 @app.patch(
@@ -982,6 +984,12 @@ def post_transaction(
     Fees and taxes on a trade capitalize into cost basis. Income is recorded gross with its
     withholding split out, and is never treated as an investor contribution.
     """
+    now = utc_now()
+    if data.occurred_at is not None and data.occurred_at > now:
+        raise DomainError(
+            422, "transaction_time_in_future", "occurred_at must not be after server time",
+            {"server_time": now.isoformat()},
+        )
     if data.ticker:
         _resolve_or_fetch(session, market, data.ticker)
     event = record_transaction(
@@ -1627,6 +1635,7 @@ CALCULATION_METHOD = (
 def _snapshot_payload(session: Session, snapshot) -> SnapshotRead:
     return SnapshotRead(
         id=snapshot.id,
+        report_timezone=snapshot.report_timezone,
         portfolio_id=snapshot.portfolio_id,
         valuation_date=snapshot.valuation_date.date(),
         valuation_as_of=snapshot.valuation_as_of,
@@ -1701,6 +1710,7 @@ def post_valuation_snapshot(
         data.valuation_date,
         provider,
         force_revision=data.force_revision,
+        report_timezone=data.report_timezone,
     )
     return _snapshot_payload(session, snapshot)
 
@@ -1734,8 +1744,10 @@ def post_rebuild_snapshots(
         data.end_date,
         provider,
         force_revision=data.force_revision,
+        report_timezone=data.report_timezone,
     )
     return RebuildRead(
+        report_timezone=data.report_timezone,
         portfolio_id=report.portfolio_id,
         start_date=report.start_date,
         end_date=report.end_date,
@@ -1761,6 +1773,7 @@ def get_nav_history(
     session: SessionDep,
     start_date: Annotated[date, Query(description="First valuation date, inclusive.")],
     end_date: Annotated[date, Query(description="Last valuation date, inclusive.")],
+    report_timezone: str = "UTC",
 ) -> NavHistoryRead:
     """
     Return the stored daily series for a range.
@@ -1779,7 +1792,9 @@ def get_nav_history(
             {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
         )
 
-    snapshots = list_snapshots(session, portfolio_id, start_date, end_date)
+    snapshots = list_snapshots(
+        session, portfolio_id, start_date, end_date, report_timezone=report_timezone
+    )
     absent = missing_dates(snapshots, start_date, end_date)
     partial = [item for item in snapshots if item.status == SnapshotStatus.PARTIAL]
 
@@ -1795,6 +1810,7 @@ def get_nav_history(
             "priced on that date"
         )
     return NavHistoryRead(
+        report_timezone=report_timezone,
         portfolio_id=portfolio_id,
         base_currency=portfolio.base_currency,
         start_date=start_date,
@@ -1838,6 +1854,7 @@ def get_portfolio_performance(
     include_daily: Annotated[
         bool, Query(description="Return the per-day series as well as the period totals.")
     ] = False,
+    report_timezone: str = "UTC",
 ) -> PerformanceRead:
     """
     Measure how a portfolio performed between two dates.
@@ -1855,9 +1872,11 @@ def get_portfolio_performance(
     awaiting a ruling, any of which biases the result in a direction this service cannot correct.
     """
     result = calculate_performance(
-        session, portfolio_id, start_date, end_date, include_daily=include_daily
+        session, portfolio_id, start_date, end_date, include_daily=include_daily,
+        report_timezone=report_timezone,
     )
     return PerformanceRead(
+        report_timezone=report_timezone,
         portfolio_id=result.portfolio_id,
         base_currency=result.base_currency,
         start_date=result.start_date,
@@ -2077,6 +2096,7 @@ def get_consolidated_summary(
     group_id: GroupId,
     session: SessionDep,
     provider: ProviderDep,
+    report_timezone: str = "UTC",
     as_of: Annotated[
         date | None, Query(description="Report date. Omit for today. Never uses later data.")
     ] = None,
@@ -2102,8 +2122,11 @@ def get_consolidated_summary(
         provider,
         as_of=as_of,
         reporting_currency=reporting_currency,
+        report_timezone=report_timezone,
     )
     return ConsolidatedSummaryRead(
+        report_timezone=report_timezone,
+        valuation_as_of=summary.valuation_as_of,
         group_id=summary.group_id,
         group_name=summary.group_name,
         reporting_currency=summary.reporting_currency,
@@ -2203,6 +2226,7 @@ def get_consolidated_nav_history(
     group_id: GroupId,
     session: SessionDep,
     provider: ProviderDep,
+    report_timezone: str = "UTC",
     start_date: Annotated[
         date | None,
         Query(description="First date, inclusive. Omit to start at the earliest snapshot."),
@@ -2237,8 +2261,10 @@ def get_consolidated_nav_history(
         start_date=start_date,
         end_date=end_date,
         reporting_currency=reporting_currency,
+        report_timezone=report_timezone,
     )
     return NavSeriesRead(
+        report_timezone=report_timezone,
         group_id=series.group_id,
         group_name=series.group_name,
         reporting_currency=series.reporting_currency,

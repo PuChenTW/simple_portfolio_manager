@@ -35,7 +35,8 @@ from .fx import Conversion, FxService, FxUnavailable
 from .journal import PortfolioKind
 from .market import MarketProvider
 from .models import Portfolio, PortfolioGroupMember, PortfolioValuationSnapshot
-from .services import ZERO, first_event_dates
+from .report_time import report_zone
+from .services import ZERO, _aware, first_event_dates
 from .valuation import CALCULATION_VERSION, SnapshotStatus
 
 CALCULATION_METHOD = (
@@ -103,12 +104,14 @@ def build_nav_series(
     start_date: date | None = None,
     end_date: date | None = None,
     reporting_currency: str | None = None,
+    report_timezone: str = "UTC",
 ) -> NavSeries:
     """Sum the group's members day by day across a range.
 
     `start_date` and `end_date` are optional: omitted, the range spans every date that has a
     snapshot, so a caller can ask for the whole history without first discovering when it begins.
     """
+    report_zone(report_timezone)
     group = get_group(session, group_id)
     currency = (reporting_currency or group.reporting_currency).upper()
     members = _current_members(session, group_id)
@@ -117,7 +120,7 @@ def build_nav_series(
         return _empty_series(group, currency, start_date, end_date)
 
     portfolio_ids = [item.id for item in members]
-    by_date = _snapshots_by_date(session, portfolio_ids)
+    by_date = _snapshots_by_date(session, portfolio_ids, report_timezone)
 
     if not by_date:
         series = _empty_series(group, currency, start_date, end_date)
@@ -133,7 +136,7 @@ def build_nav_series(
     fx = FxService(session, provider)
     _prefetch_rates(fx, members, currency, first, last)
 
-    entries = _account_entries(session, members, by_date)
+    entries = _account_entries(session, members, by_date, report_timezone)
     started_by_date = _started_on_or_before(entries)
 
     kinds = {item.id: item.kind for item in members}
@@ -144,6 +147,7 @@ def build_nav_series(
     for day in sorted(by_date):
         if day < first or day > last:
             continue
+        fx.cutoff = min(_aware(row.valuation_as_of) for row in by_date[day].values())
         point = _point_for(fx, day, by_date[day], kinds, currency, rates_used)
         expected = started_by_date(day)
         point.missing_portfolio_ids = sorted(expected - set(by_date[day]))
@@ -196,7 +200,7 @@ def _current_members(session: Session, group_id: str) -> list[Portfolio]:
 
 
 def _snapshots_by_date(
-    session: Session, portfolio_ids: list[str]
+    session: Session, portfolio_ids: list[str], report_timezone: str = "UTC",
 ) -> dict[date, dict[str, PortfolioValuationSnapshot]]:
     """Every member's snapshots, grouped by date.
 
@@ -207,6 +211,7 @@ def _snapshots_by_date(
         select(PortfolioValuationSnapshot)
         .where(
             PortfolioValuationSnapshot.portfolio_id.in_(portfolio_ids),
+            PortfolioValuationSnapshot.report_timezone == report_timezone,
             PortfolioValuationSnapshot.calculation_version == CALCULATION_VERSION,
         )
         .order_by(PortfolioValuationSnapshot.valuation_date)
@@ -241,13 +246,14 @@ def _prefetch_rates(
     """Fetch each pair's whole range once, instead of a 30-day window per date."""
     for base in sorted({item.base_currency.upper() for item in members}):
         if base != currency:
-            fx.prefetch_range(base, currency, first, last)
+            fx.prefetch_range(base, currency, first - timedelta(days=30), last)
 
 
 def _account_entries(
     session: Session,
     members: list[Portfolio],
     by_date: dict[date, dict[str, PortfolioValuationSnapshot]],
+    report_timezone: str = "UTC",
 ) -> list[AccountEntry]:
     """When each account's data begins.
 
@@ -256,7 +262,7 @@ def _account_entries(
     a date where the line does not move. The entry that matters is the first real activity.
     Accounts with no journal events fall back to their first snapshot so they are still declared.
     """
-    started = first_event_dates(session, [item.id for item in members])
+    started = first_event_dates(session, [item.id for item in members], report_timezone)
     earliest: dict[str, date] = {}
     for day, snapshots in by_date.items():
         for portfolio_id in snapshots:

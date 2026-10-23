@@ -6,6 +6,7 @@
  */
 
 import { ApiError, type PortfolioKind, type TransactionCreate } from './api/client'
+import { resolveTime } from './timezone'
 
 /** The transaction types `record_transaction` accepts, in picker order.
  *
@@ -118,6 +119,9 @@ export type Entry = {
 export type TransactionDraft = Required<Entry> & {
   ticker: string
   occurredOn: string
+  occurredTime: string
+  timezone: string
+  offset?: string
   requestId: string
   memo: string
   sourceReference: string
@@ -129,11 +133,12 @@ export type TransactionDraft = Required<Entry> & {
 export function prepareEntry(draft: TransactionDraft, kind: PortfolioKind) {
   const shape = shapeFor(draft.type)
   const showTicker = acceptsTicker(draft.type) && kind === 'investment'
+  const time = resolveTime({ date: draft.occurredOn, time: draft.occurredTime,
+    timezone: draft.timezone, offset: draft.offset })
   const payload: TransactionCreate = {
     request_id: draft.requestId,
     transaction_type: draft.type,
-    // Preserve the entered calendar date: UTC serialization can move it into the previous day.
-    occurred_at: draft.occurredOn ? `${draft.occurredOn}T00:00:00` : '',
+    occurred_at: time.timestamp ?? '',
   }
 
   if (shape === 'trade') {
@@ -162,7 +167,8 @@ export function prepareEntry(draft: TransactionDraft, kind: PortfolioKind) {
     ? !!payload.ticker && Number(payload.quantity) > 0 && Number(payload.unit_price) > 0
     : Number(payload.amount) > 0
 
-  return { shape, showTicker, payload, effect, complete: !!draft.occurredOn && complete }
+  return { shape, showTicker, payload, effect, timeError: time.error,
+    complete: !!time.timestamp && complete }
 }
 
 /** An empty box means zero, not unknown. A box holding nonsense means unknown. */

@@ -15,7 +15,7 @@ is not a smaller truth -- it is a different number wearing the same label.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime
 from decimal import Decimal, DivisionByZero, InvalidOperation
 
 from sqlalchemy.orm import Session
@@ -24,6 +24,7 @@ from .errors import DomainError
 from .journal import PortfolioKind
 from .models import PortfolioValuationSnapshot
 from .replay import FlowTotals, flows_by_bucket, replay_state
+from .report_time import ReportTime
 from .services import ZERO, get_portfolio
 from .valuation import (
     CALCULATION_VERSION,
@@ -118,6 +119,7 @@ def calculate_performance(
     end_date: date,
     *,
     include_daily: bool = False,
+    report_timezone: str = "UTC",
 ) -> PerformanceResult:
     """Measure return over a period from stored snapshots and journal flows."""
     portfolio = get_portfolio(session, portfolio_id)
@@ -129,8 +131,12 @@ def calculate_performance(
             {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
         )
 
-    snapshots = list_snapshots(session, portfolio_id, start_date, end_date)
-    coverage = _assess_coverage(session, portfolio_id, snapshots, start_date, end_date)
+    snapshots = list_snapshots(
+        session, portfolio_id, start_date, end_date, report_timezone=report_timezone
+    )
+    coverage = _assess_coverage(
+        session, portfolio_id, snapshots, start_date, end_date, ReportTime(report_timezone)
+    )
 
     if portfolio.kind == PortfolioKind.LIABILITY.value:
         return _not_measurable(portfolio, start_date, end_date, snapshots, coverage)
@@ -380,13 +386,14 @@ def _assess_coverage(
     snapshots: list[PortfolioValuationSnapshot],
     start_date: date,
     end_date: date,
+    clock: ReportTime,
 ) -> PerformanceCoverage:
     absent = missing_dates(snapshots, start_date, end_date)
     partial = [item for item in snapshots if item.status == SnapshotStatus.PARTIAL]
     # An event whose cash movement cannot be classified sits in neither the capital base nor the
     # return, so both TWR and XIRR are computed over an incomplete picture.
     unclassified = replay_state(
-        session, portfolio_id, _end_of_day(end_date)
+        session, portfolio_id, clock.end_of_day(end_date)
     ).coverage.unknown_flow_events
 
     coverage = PerformanceCoverage(
@@ -509,6 +516,3 @@ def _date_of(snapshot: PortfolioValuationSnapshot) -> date:
 def _aware_utc(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=UTC)
 
-
-def _end_of_day(value: date) -> datetime:
-    return datetime.combine(value, time(23, 59, 59, 999999), UTC)

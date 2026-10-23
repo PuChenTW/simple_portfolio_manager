@@ -56,10 +56,11 @@ function lastDayOfMonth(year: number, month: number): number {
   return new Date(Date.UTC(year, month, 0)).getUTCDate()
 }
 
+import { effectiveTimezone, timeFields } from './timezone'
+
 /** Today as `YYYY-MM-DD` in the viewer's own timezone, which is the date they mean by "today". */
 export function today(): string {
-  const now = new Date()
-  return iso(now.getFullYear(), now.getMonth() + 1, now.getDate())
+  return timeFields(effectiveTimezone()).date
 }
 
 /** `YYYY-MM-DD` for the first day of the year the given date falls in. */

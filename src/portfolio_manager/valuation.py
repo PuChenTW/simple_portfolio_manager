@@ -32,11 +32,12 @@ from .models import (
     PositionValuationSnapshot,
 )
 from .replay import ReplayedPosition, replay_state
+from .report_time import ReportTime, completed_price_date, report_zone
 from .schemas import utc_now
 from .services import ZERO, _aware, get_portfolio
 
 # Bump when the meaning of a stored snapshot changes, so old and new revisions stay comparable.
-CALCULATION_VERSION = "v1"
+CALCULATION_VERSION = "v2"
 
 # How far back a close may be carried forward before the price is flagged stale. Weekends and
 # holidays routinely leave a valuation date without its own bar; a quarter-long gap is different.
@@ -142,6 +143,7 @@ def create_snapshot(
     *,
     pricer: HistoricalPricer | None = None,
     force_revision: bool = False,
+    report_timezone: str = "UTC",
 ) -> PortfolioValuationSnapshot:
     """Value one portfolio on one date, replacing an existing revision only when asked.
 
@@ -149,33 +151,27 @@ def create_snapshot(
     `force_revision` is set, so a retried job cannot quietly produce a second version of history.
     """
     portfolio = get_portfolio(session, portfolio_id)
-    existing = _existing_snapshot(session, portfolio_id, valuation_date)
+    clock = ReportTime(report_timezone)
+    cutoff = clock.cutoff(valuation_date, utc_now())
+    existing = _existing_snapshot(session, portfolio_id, valuation_date, report_timezone)
     if existing is not None and not force_revision:
         return existing
-
-    now = utc_now()
-    if valuation_date > now.date():
-        raise DomainError(
-            422,
-            "valuation_date_in_future",
-            "A portfolio cannot be valued on a date that has not happened",
-            {"valuation_date": valuation_date.isoformat()},
-        )
-    # Today's snapshot is capped at the current instant: an end-of-day cutoff on a day still in
-    # progress would claim to cover hours that have not happened.
-    cutoff = min(_end_of_day(valuation_date), now)
 
     state = replay_state(session, portfolio_id, cutoff)
     pricer = pricer or HistoricalPricer(provider)
     tickers = _instrument_currencies(session)
+    markets = dict(session.execute(select(Instrument.ticker, Instrument.market)).all())
 
     priced: list[tuple[ReplayedPosition, PricePoint | None]] = []
     for position in state.positions:
         if position.quantity == ZERO:
             continue  # Fully exited before the cutoff; it held nothing on this date.
-        priced.append((position, pricer.price_at(position.ticker, valuation_date)))
+        last_close = completed_price_date(cutoff, markets.get(position.ticker, ""))
+        price_date = min(valuation_date, last_close)
+        priced.append((position, pricer.price_at(position.ticker, price_date)))
 
     snapshot = _build_snapshot(portfolio, valuation_date, cutoff, state, priced, pricer)
+    snapshot.report_timezone = report_timezone
 
     if existing is not None:
         session.delete(existing)
@@ -312,6 +308,7 @@ def rebuild_snapshots(
     provider: MarketProvider,
     *,
     force_revision: bool = False,
+    report_timezone: str = "UTC",
 ) -> RebuildReport:
     """Build snapshots across a date range as a bounded, re-runnable job.
 
@@ -329,7 +326,7 @@ def rebuild_snapshots(
             {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
         )
 
-    today = utc_now().date()
+    today = ReportTime(report_timezone).today(utc_now())
     report = RebuildReport(
         portfolio_id=portfolio_id,
         start_date=start_date,
@@ -348,7 +345,7 @@ def rebuild_snapshots(
 
     current = start_date
     while current <= end_date:
-        existing = _existing_snapshot(session, portfolio_id, current)
+        existing = _existing_snapshot(session, portfolio_id, current, report_timezone)
         if existing is not None and not force_revision:
             report.skipped_existing += 1
             current += timedelta(days=1)
@@ -361,6 +358,7 @@ def rebuild_snapshots(
                 provider,
                 pricer=pricer,
                 force_revision=force_revision,
+                report_timezone=report_timezone,
             )
         except DomainError as exc:
             # One bad date must not abandon the rest of the range.
@@ -385,9 +383,11 @@ def snapshot_warnings(snapshot: PortfolioValuationSnapshot) -> list[str]:
 
 
 def list_snapshots(
-    session: Session, portfolio_id: str, start_date: date, end_date: date
+    session: Session, portfolio_id: str, start_date: date, end_date: date,
+    *, report_timezone: str = "UTC",
 ) -> list[PortfolioValuationSnapshot]:
     """Stored snapshots in a range, oldest first. Absent dates stay absent."""
+    report_zone(report_timezone)
     return list(
         session.scalars(
             select(PortfolioValuationSnapshot)
@@ -395,6 +395,7 @@ def list_snapshots(
                 PortfolioValuationSnapshot.portfolio_id == portfolio_id,
                 PortfolioValuationSnapshot.valuation_date >= _start_of_day(start_date),
                 PortfolioValuationSnapshot.valuation_date <= _start_of_day(end_date),
+                PortfolioValuationSnapshot.report_timezone == report_timezone,
                 PortfolioValuationSnapshot.calculation_version == CALCULATION_VERSION,
             )
             .order_by(PortfolioValuationSnapshot.valuation_date)
@@ -432,12 +433,13 @@ def snapshot_positions(
 
 
 def _existing_snapshot(
-    session: Session, portfolio_id: str, valuation_date: date
+    session: Session, portfolio_id: str, valuation_date: date, report_timezone: str = "UTC",
 ) -> PortfolioValuationSnapshot | None:
     return session.scalar(
         select(PortfolioValuationSnapshot).where(
             PortfolioValuationSnapshot.portfolio_id == portfolio_id,
             PortfolioValuationSnapshot.valuation_date == _start_of_day(valuation_date),
+            PortfolioValuationSnapshot.report_timezone == report_timezone,
             PortfolioValuationSnapshot.calculation_version == CALCULATION_VERSION,
         )
     )
@@ -449,11 +451,6 @@ def _instrument_currencies(session: Session) -> dict[str, str]:
 
 def _start_of_day(value: date) -> datetime:
     return datetime.combine(value, time(0, 0), UTC)
-
-
-def _end_of_day(value: date) -> datetime:
-    """The cutoff instant for a valuation date: everything that happened that day is included."""
-    return datetime.combine(value, time(23, 59, 59, 999999), UTC)
 
 
 __all__ = [
