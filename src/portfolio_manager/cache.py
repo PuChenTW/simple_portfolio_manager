@@ -19,9 +19,10 @@ Rather than guess when that happened, recording a corporate action warns the ope
 
 import json
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import Protocol
 
 from .market import (
     HistoryAdjustment,
@@ -29,6 +30,7 @@ from .market import (
     HistoryInterval,
     HistoryResult,
     MarketProvider,
+    MarketSnapshot,
 )
 
 logger = logging.getLogger(__name__)
@@ -37,6 +39,16 @@ logger = logging.getLogger(__name__)
 SCHEMA_VERSION = 1
 
 KEY_PREFIX = "pm"
+
+
+class CacheClient(Protocol):
+    def mget(self, keys: list[str]) -> Sequence[str | bytes | None]: ...
+
+    def setex(self, key: str, ttl: int, value: str) -> object: ...
+
+    def scan_iter(self, *, match: str, count: int) -> Iterable[str]: ...
+
+    def delete(self, key: str) -> int: ...
 
 
 class CacheUnavailable(Exception):
@@ -99,7 +111,7 @@ class CachingMarketProvider:
     def __init__(
         self,
         inner: MarketProvider,
-        client: object | None,
+        client: CacheClient | None,
         *,
         month_ttl_seconds: int,
         recent_ttl_seconds: int,
@@ -112,7 +124,7 @@ class CachingMarketProvider:
     # `fetch` returns a live quote plus a year of derived indicators. Caching it here would
     # duplicate `MarketService`, which already has a TTL and the stale-quote fallback, so this
     # simply delegates.
-    def fetch(self, ticker: str):
+    def fetch(self, ticker: str) -> MarketSnapshot:
         return self.inner.fetch(ticker)
 
     def history(
@@ -168,7 +180,8 @@ class CachingMarketProvider:
     ) -> HistoryResult:
         months = list(months_between(start_date, end_date))
         keys = [month_key(symbol, interval, adjustment, month) for month in months]
-        stored = self.client.mget(keys)  # type: ignore[union-attr]
+        assert self.client is not None
+        stored = self.client.mget(keys)
 
         cached: dict[date, dict] = {}
         missing: list[date] = []
@@ -240,6 +253,7 @@ class CachingMarketProvider:
         adjustment: HistoryAdjustment,
     ) -> dict[date, dict]:
         """Split a provider result into month buckets and write each one."""
+        assert self.client is not None
         today = datetime.now(UTC).date()
         this_month = today.replace(day=1)
         by_month: dict[date, list[HistoryBar]] = {month: [] for month in months}
@@ -284,7 +298,7 @@ class CachingMarketProvider:
                 continue
             ttl = self.recent_ttl if month >= this_month else self.month_ttl
             try:
-                self.client.setex(  # type: ignore[union-attr]
+                self.client.setex(
                     month_key(symbol, interval, adjustment, month), ttl, json.dumps(payload)
                 )
             except Exception:
@@ -298,8 +312,8 @@ class CachingMarketProvider:
         symbol = ticker.strip().upper()
         removed = 0
         # SCAN rather than KEYS: this runs against the same Redis serving live requests.
-        for key in self.client.scan_iter(match=ticker_pattern(symbol), count=100):  # type: ignore[union-attr]
-            removed += self.client.delete(key)  # type: ignore[union-attr]
+        for key in self.client.scan_iter(match=ticker_pattern(symbol), count=100):
+            removed += self.client.delete(key)
         return removed
 
 
@@ -308,7 +322,7 @@ def _end_of_month(month: date) -> date:
 
 
 def _load(raw: object) -> dict | None:
-    if not raw:
+    if not isinstance(raw, (str, bytes, bytearray)) or not raw:
         return None
     try:
         payload = json.loads(raw)
@@ -338,7 +352,7 @@ def build_provider(inner: MarketProvider) -> MarketProvider:
     )
 
 
-def create_client(url: str | None) -> object | None:
+def create_client(url: str | None) -> CacheClient | None:
     """Build a Redis client, or None when caching is not configured or unreachable."""
     if not url:
         return None

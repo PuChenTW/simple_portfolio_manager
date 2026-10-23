@@ -23,6 +23,9 @@ portfolio-mcp = "portfolio_manager.mcp_server:main"
 
 [dependency-groups]
 dev = [
+    "mypy>=2.4.0",
+    "pandas-stubs>=3.0.5.260914",
+    "pre-commit>=4.7.0",
     "pytest>=8.4.1",
     "ruff>=0.12.11",
 ]
@@ -37,6 +40,18 @@ packages = ["src/portfolio_manager"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = ["external: tests that call the live Yahoo Finance service"]
+
+[tool.mypy]
+python_version = "3.13"
+files = ["src/portfolio_manager"]
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_reexport = true
+
+[[tool.mypy.overrides]]
+module = ["yfinance.*"]
+ignore_missing_imports = true
 
 [tool.ruff]
 line-length = 100

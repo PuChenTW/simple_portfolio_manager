@@ -366,9 +366,42 @@ description.
 ## Quality checks
 
 ```bash
+uv run mypy
 uv run pytest
 uv run ruff check .
 ```
+
+`uv sync` installs mypy, pandas stubs, Ruff, and pre-commit with the development dependencies.
+Install frontend dependencies once per clone:
+
+```bash
+bun install --cwd frontend --frozen-lockfile
+```
+
+Install the Git hook once per clone:
+
+```bash
+uv run pre-commit install
+```
+
+The Ruff hook runs `uv run --locked ruff check .` when staged changes affect Python files or check configuration.
+It checks the entire repository without modifying files.
+The mypy hook runs `uv run --locked mypy` when staged changes affect application Python files or typing configuration.
+It checks the entire application, not only changed files, so it detects errors across modules.
+Both Python hooks use the project's uv environment.
+When staged changes affect `frontend/` or the hook configuration, the frontend hook runs `bun run --cwd frontend check`.
+It checks Svelte, TypeScript, build configurations, and Playwright files.
+The frontend hook requires Bun and installed frontend dependencies.
+Pre-commit runs static checks only.
+Run frontend unit tests separately with `bun run --cwd frontend test`.
+Run Python tests separately with `uv run pytest`.
+Run all hooks manually with `uv run pre-commit run --all-files`.
+Run mypy directly with `uv run mypy`.
+The configuration in `pyproject.toml` checks all modules under `src/portfolio_manager` for Python 3.13.
+It also checks function bodies without annotations, but it does not require annotations on every function.
+Tests and Alembic scripts are outside the default scope.
+Only yfinance skips missing-stub errors because it supplies no type information.
+Other dependencies retain their type checks.
 
 Live Yahoo smoke tests are skipped by default. Run them explicitly when network access is
 available:

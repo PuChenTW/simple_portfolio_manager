@@ -9,10 +9,25 @@ in `src/portfolio_manager/static/`, so that whole directory is now this project'
 - `bun run dev` — dev server with hot reload, proxying `/api` to `PORTFOLIO_API_URL`
   (default `http://127.0.0.1:8003`).
 - `bun run build` — build into `src/portfolio_manager/static/`, where FastAPI serves it.
-- `bun run check` — typecheck Svelte and TypeScript.
+- `bun run check` — typecheck Svelte, TypeScript, build configurations, and Playwright files.
+- `bun run test` — run frontend unit tests without starting the API or a browser.
 - `bun run types` — regenerate `src/lib/api/schema.d.ts` from a running API.
 
 The build output is gitignored: it is an artifact, produced at image build time.
+
+## Checks before committing
+
+The repository's frontend pre-commit hook runs `check` when frontend files or hook configuration change.
+Install dependencies with `bun install --frozen-lockfile` in this directory.
+Install the hooks with `uv run pre-commit install` from the repository root.
+Run all hooks with `uv run pre-commit run --all-files` from the repository root.
+
+`tsconfig.app.json` covers application files and unit tests.
+`tsconfig.node.json` covers Vite, Vitest, and Playwright configurations.
+`tsconfig.e2e.json` covers `e2e/` with Node and DOM types for Playwright browser callbacks.
+Pre-commit runs static checks only, including type checks on test files.
+The hooks do not build the dashboard or run tests.
+Run unit tests separately with `bun run test`.
 
 ## Types come from the API, not from hand-written interfaces
 

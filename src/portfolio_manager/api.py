@@ -2,7 +2,7 @@ import json
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path as FilePath
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Path, Query, Request, status
 from fastapi.exceptions import RequestValidationError
@@ -134,6 +134,7 @@ from .services import (
     replace_tags,
     update_portfolio,
 )
+from .taxonomy import AssetClass, Provenance
 from .transfers import events_of, reverse_transfer, transfer_cash
 from .valuation import (
     CALCULATION_VERSION,
@@ -271,7 +272,7 @@ OPENAPI_TAGS = [
     },
 ]
 
-GLOBAL_RESPONSES = {
+GLOBAL_RESPONSES: dict[int | str, dict[str, Any]] = {
     422: {
         "model": ErrorResponse,
         "description": "Invalid request data or a violated portfolio rule; inspect `code`.",
@@ -329,13 +330,13 @@ STATIC_DIR = FilePath(__file__).parent / "static"
 _fastapi_openapi = app.openapi
 
 
-def agent_friendly_openapi():
+def agent_friendly_openapi() -> dict[str, Any]:
     schema = _fastapi_openapi()
     schema["x-agent-skill"] = AGENT_SKILL_METADATA
     return schema
 
 
-app.openapi = agent_friendly_openapi
+app.openapi = agent_friendly_openapi  # type: ignore[method-assign]
 
 
 _market_provider = build_provider(YahooMarketProvider())
@@ -1113,7 +1114,7 @@ def _attach_legs(session: Session, events: list, items: list[JournalEventRead]) 
     tickers = ticker_index(session)
     for event, item in zip(events, items, strict=True):
         item.legs = [
-            _journal_leg_read(leg, tickers.get(leg.instrument_id))
+            _journal_leg_read(leg, tickers.get(leg.instrument_id) if leg.instrument_id else None)
             for leg in legs_by_event.get(event.id, [])
         ]
 
@@ -1268,6 +1269,7 @@ def post_transfer(data: TransferCreate, session: SessionDep) -> TransferRead:
         source_reference=data.source_reference,
         memo=data.memo,
     )
+    assert out_event.transfer_id is not None
     return _transfer_response(session, out_event.transfer_id)
 
 
@@ -2150,8 +2152,8 @@ def get_consolidated_summary(
                 fx_path=row.fx_path,
                 fx_as_of=row.fx_as_of,
                 weight_percent=row.weight_percent,
-                asset_class=row.asset_class,
-                asset_class_provenance=row.asset_class_provenance,
+                asset_class=AssetClass(row.asset_class),
+                asset_class_provenance=Provenance(row.asset_class_provenance),
                 warnings=row.warnings,
             )
             for row in summary.positions

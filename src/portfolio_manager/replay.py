@@ -365,7 +365,12 @@ def _events_through(
 
 
 def _ticker_index(session: Session) -> dict[str, str]:
-    return dict(session.execute(select(Instrument.instrument_id, Instrument.ticker)).all())
+    return {
+        instrument_id: ticker
+        for instrument_id, ticker in session.execute(
+            select(Instrument.instrument_id, Instrument.ticker)
+        )
+    }
 
 
 def _effective_type(event: JournalEvent, reversed_types: dict[str, str]) -> EventType | None:

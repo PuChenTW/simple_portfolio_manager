@@ -65,7 +65,7 @@ def _wilder_average(series: pd.Series, window: int) -> pd.Series:
     result.loc[first_index] = average
     for index, value in clean.iloc[window:].items():
         average = (average * (window - 1) + value) / window
-        result.loc[index] = average
+        result.at[index] = average
     return result
 
 
@@ -295,7 +295,8 @@ def relative_returns(
 def event_metrics(
     frame: pd.DataFrame, requested_date: date
 ) -> tuple[dict[str, date | Decimal | None], list[str]]:
-    eligible = frame[frame.index.date >= requested_date]
+    timestamps = pd.DatetimeIndex(frame.index)
+    eligible = frame[timestamps.date >= requested_date]
     if eligible.empty:
         return {
             "requested_event_date": requested_date,
@@ -308,8 +309,8 @@ def event_metrics(
             "anchored_vwap": None,
         }, ["No observation exists on or after the requested event date"]
 
-    anchor_timestamp = eligible.index[0]
-    anchor_position = frame.index.get_loc(anchor_timestamp)
+    anchor_timestamp = pd.Timestamp(eligible.index[0])
+    anchor_position = int(frame.index.get_indexer_for(pd.DatetimeIndex([anchor_timestamp]))[0])
     anchor = frame.iloc[anchor_position]
     previous_close = frame.iloc[anchor_position - 1]["close"] if anchor_position > 0 else None
     gap = (

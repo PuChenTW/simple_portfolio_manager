@@ -160,7 +160,10 @@ def create_snapshot(
     state = replay_state(session, portfolio_id, cutoff)
     pricer = pricer or HistoricalPricer(provider)
     tickers = _instrument_currencies(session)
-    markets = dict(session.execute(select(Instrument.ticker, Instrument.market)).all())
+    markets = {
+        ticker: market
+        for ticker, market in session.execute(select(Instrument.ticker, Instrument.market))
+    }
 
     priced: list[tuple[ReplayedPosition, PricePoint | None]] = []
     for position in state.positions:
@@ -446,7 +449,10 @@ def _existing_snapshot(
 
 
 def _instrument_currencies(session: Session) -> dict[str, str]:
-    return dict(session.execute(select(Instrument.ticker, Instrument.currency)).all())
+    return {
+        ticker: currency
+        for ticker, currency in session.execute(select(Instrument.ticker, Instrument.currency))
+    }
 
 
 def _start_of_day(value: date) -> datetime:

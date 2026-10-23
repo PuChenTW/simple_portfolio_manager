@@ -1,0 +1,21 @@
+repos:
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff
+        entry: uv run --locked ruff check .
+        language: system
+        pass_filenames: false
+        files: (\.pyi?$|^pyproject\.toml$|^uv\.lock$|^\.pre-commit-config\.yaml$)
+      - id: frontend-check
+        name: frontend check
+        entry: bun run --cwd frontend check
+        language: system
+        pass_filenames: false
+        files: ^(frontend/|\.pre-commit-config\.yaml$)
+      - id: mypy
+        name: mypy
+        entry: uv run --locked mypy
+        language: system
+        pass_filenames: false
+        files: ^(src/portfolio_manager/.*\.py|pyproject\.toml|uv\.lock|\.pre-commit-config\.yaml)$

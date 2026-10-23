@@ -634,11 +634,12 @@ def reversed_types_for(session: Session, events: list[JournalEvent]) -> dict[str
     if not targets:
         return {}
 
-    original_types = dict(
-        session.execute(
+    original_types = {
+        event_id: event_type
+        for event_id, event_type in session.execute(
             select(JournalEvent.id, JournalEvent.event_type).where(JournalEvent.id.in_(targets))
-        ).all()
-    )
+        )
+    }
     return {
         event.id: original_types[event.reverses_event_id]
         for event in events
@@ -652,7 +653,12 @@ def ticker_index(session: Session) -> dict[str, str]:
     Legs store `instrument_id`, a surrogate nobody can read. Resolving one ticker per leg would
     reintroduce the per-row cost this module exists to avoid.
     """
-    return dict(session.execute(select(Instrument.instrument_id, Instrument.ticker)).all())
+    return {
+        instrument_id: ticker
+        for instrument_id, ticker in session.execute(
+            select(Instrument.instrument_id, Instrument.ticker)
+        )
+    }
 
 
 def event_detail(session: Session, portfolio_id: str, event_id: str) -> dict:

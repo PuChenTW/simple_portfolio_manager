@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Decimal
 from enum import StrEnum
-from typing import Protocol
+from typing import Any, Protocol
 
 import pandas as pd
 import yfinance as yf
@@ -102,7 +102,7 @@ class MarketProvider(Protocol):
     ) -> HistoryResult: ...
 
 
-def _decimal(value: object) -> Decimal | None:
+def _decimal(value: Any) -> Decimal | None:
     if value is None or pd.isna(value):
         return None
     return Decimal(str(value))
@@ -130,22 +130,25 @@ def clean_provider_value(value: Decimal) -> Decimal:
     rounded = value.quantize(quantum, rounding=ROUND_HALF_EVEN)
     # Drop trailing zeros without ever moving to exponent form (1E+2 instead of 100).
     trimmed = rounded.normalize()
-    return trimmed if trimmed.as_tuple().exponent <= 0 else trimmed.quantize(Decimal("1"))
+    trimmed_exponent = trimmed.as_tuple().exponent
+    if isinstance(trimmed_exponent, int) and trimmed_exponent <= 0:
+        return trimmed
+    return trimmed.quantize(Decimal("1"))
 
 
-def _utc_timestamp(value: object) -> datetime:
+def _utc_timestamp(value: Any) -> datetime:
     timestamp = pd.Timestamp(value)
     if timestamp.tzinfo is None:
         timestamp = timestamp.tz_localize("UTC")
     return timestamp.tz_convert("UTC").to_pydatetime()
 
 
-def _observation_timestamp(value: object) -> datetime:
+def _observation_timestamp(value: Any) -> datetime:
     """Preserve Yahoo's exchange-local bar date while normalizing its time representation."""
     return datetime.combine(pd.Timestamp(value).date(), datetime.min.time(), UTC)
 
 
-def _provider_timestamp(value: object, fallback: object) -> datetime:
+def _provider_timestamp(value: Any, fallback: Any) -> datetime:
     if isinstance(value, (int, float)):
         return datetime.fromtimestamp(value, UTC)
     if value:

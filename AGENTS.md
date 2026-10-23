@@ -122,6 +122,17 @@ idempotency, stale-quote warnings, and machine-readable errors.
 
 ## Verifying your work
 
+- After each coherent implementation change, run the applicable checks from `.pre-commit-config.yaml`.
+  Run checks at these boundaries rather than after every file edit.
+  For Python changes, run `uv run --locked ruff check .` and `uv run --locked mypy`.
+  For frontend changes, run `bun run --cwd frontend check`.
+  If check configuration changes, run all configured checks.
+- Before a commit, run `uv run pre-commit run --all-files`.
+  Treat the Git hook as a final safeguard, not the first validation step.
+  These checks supplement the required tests, builds, and browser verification below.
+- Resolve failures caused by your changes before expanding the implementation.
+  Report existing failures separately from failures caused by your changes.
+  Preserve each validation command's exit status when running multiple commands.
 - Run `uv run pytest` and `uv run ruff check .` before submitting.
 - Dashboard changes must be verified with Playwright against the running service, not by
   inspection. Run `bun run check` and `bun run build` in `frontend/` first: the served page is

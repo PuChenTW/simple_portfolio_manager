@@ -1,6 +1,7 @@
 import hashlib
 import json
 import unicodedata
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -34,16 +35,22 @@ from .models import (
 from .schemas import (
     CashAccountCreate,
     CashPositionRead,
+    EventAnalysisRead,
     IndicatorsRead,
     LiabilityAccountCreate,
     MarketInstrumentRead,
+    MomentumRead,
     PortfolioCreate,
     PortfolioRead,
     PortfolioSummary,
     PortfolioUpdate,
     PositionRead,
     QuoteRead,
+    RelativeStrengthRead,
     TechnicalSnapshotRead,
+    TrendRead,
+    VolatilityRead,
+    VolumeAnalysisRead,
     utc_now,
 )
 from .sessions import quote_ttl_for
@@ -59,7 +66,7 @@ def _aware(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-def _fingerprint(payload: dict[str, object]) -> str:
+def _fingerprint(payload: Mapping[str, object]) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode()).hexdigest()
 
@@ -431,12 +438,14 @@ class MarketService:
             actual_start_date=actual_start,
             actual_end_date=actual_end,
             bar_count=len(frame),
-            trend=analysis.trend,
-            momentum=analysis.momentum,
-            volatility=analysis.volatility,
-            volume=analysis.volume,
-            relative_strength=relative,
-            event_analysis=event,
+            trend=TrendRead.model_validate(analysis.trend),
+            momentum=MomentumRead.model_validate(analysis.momentum),
+            volatility=VolatilityRead.model_validate(analysis.volatility),
+            volume=VolumeAnalysisRead.model_validate(analysis.volume),
+            relative_strength=(
+                RelativeStrengthRead.model_validate(relative) if relative is not None else None
+            ),
+            event_analysis=EventAnalysisRead.model_validate(event) if event is not None else None,
             warnings=warnings,
         )
 

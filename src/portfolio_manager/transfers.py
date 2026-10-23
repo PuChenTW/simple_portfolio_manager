@@ -129,7 +129,7 @@ def _originals(events: list[JournalEvent]) -> tuple[JournalEvent, JournalEvent]:
         None,
     )
     if out_event is None or in_event is None:
-        raise not_found("transfer", events[0].transfer_id if events else "")
+        raise not_found("transfer", (events[0].transfer_id or "") if events else "")
     return out_event, in_event
 
 
@@ -298,7 +298,7 @@ def reverse_transfer(
         for event in (out_event, in_event):
             legs = invert(_legs_of(session, event.id))
             require_balanced(legs, event.functional_currency)
-            portfolio = session.get(Portfolio, event.portfolio_id)
+            portfolio = get_portfolio(session, event.portfolio_id)
             reversal = _persist(
                 session,
                 portfolio,
